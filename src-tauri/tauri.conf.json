@@ -50,7 +50,7 @@
       "endpoints": [
         "https://github.com/fanlic/fanssh-updates/releases/latest/download/latest.json"
       ],
-      "pubkey": "REPLACE_WITH_PUBLIC_KEY_FROM_TAURI_SIGNER",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE3NDU1NUEyMzQwOTI2NUEKUldSYUpnazBvbFZGcDhaNWVDV0R5eWt0NmwzYnYwU2hBODRnZUt5RlV0U3BtWHFNWngwSXkzZlUK",
       "windows": {
         "installMode": "passive"
       }
