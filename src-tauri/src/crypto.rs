@@ -1,13 +1,17 @@
+#[cfg(not(windows))]
 use aes_gcm::aead::{Aead, KeyInit};
+#[cfg(not(windows))]
 use aes_gcm::{Aes256Gcm, Nonce};
 use anyhow::{bail, Context, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+#[cfg(not(windows))]
 use rand::RngCore;
 use std::path::Path;
 
 const DPAPI_PREFIX: &str = "dpapi:v1:";
 const AES_PREFIX: &str = "aesgcm:v1:";
+#[cfg(not(windows))]
 const KEY_FILE: &str = "secret.key";
 
 /// 加密敏感字符串。
@@ -55,17 +59,26 @@ pub fn decrypt_secret(value: &str, dir: &Path) -> Result<String> {
     }
 
     if let Some(rest) = value.strip_prefix(AES_PREFIX) {
-        let mut parts = rest.splitn(2, ':');
-        let nonce_b64 = parts.next().context("AES 密文格式错误")?;
-        let data_b64 = parts.next().context("AES 密文格式错误")?;
-        let nonce = STANDARD.decode(nonce_b64).context("AES nonce 解码失败")?;
-        let data = STANDARD.decode(data_b64).context("AES 密文解码失败")?;
-        let key = load_or_create_key(dir)?;
-        let cipher = Aes256Gcm::new_from_slice(&key).expect("32 字节密钥");
-        let plain = cipher
-            .decrypt(Nonce::from_slice(&nonce), data.as_ref())
-            .map_err(|_| anyhow::anyhow!("AES-GCM 解密失败（密钥不匹配或数据损坏）"))?;
-        return String::from_utf8(plain).context("凭据不是合法 UTF-8");
+        #[cfg(not(windows))]
+        {
+            let mut parts = rest.splitn(2, ':');
+            let nonce_b64 = parts.next().context("AES 密文格式错误")?;
+            let data_b64 = parts.next().context("AES 密文格式错误")?;
+            let nonce = STANDARD.decode(nonce_b64).context("AES nonce 解码失败")?;
+            let data = STANDARD.decode(data_b64).context("AES 密文解码失败")?;
+            let key = load_or_create_key(dir)?;
+            let cipher = Aes256Gcm::new_from_slice(&key).expect("32 字节密钥");
+            let plain = cipher
+                .decrypt(Nonce::from_slice(&nonce), data.as_ref())
+                .map_err(|_| anyhow::anyhow!("AES-GCM 解密失败（密钥不匹配或数据损坏）"))?;
+            return String::from_utf8(plain).context("凭据不是合法 UTF-8");
+        }
+        #[cfg(windows)]
+        {
+            let _ = rest;
+            let _ = dir;
+            bail!("该凭据由 Linux 开发模式的 AES-GCM 加密，Windows 下无法解密，请重新录入");
+        }
     }
 
     bail!("未知的凭据加密格式")
