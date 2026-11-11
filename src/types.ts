@@ -28,6 +28,7 @@ export interface RdpPrefs {
   drive_redirect: boolean;
   admin_session: boolean;
   gateway?: string | null;
+  domain?: string | null;
 }
 
 export interface ProfileOptions {

@@ -12,7 +12,7 @@ use crate::ipc::dto::{
     SftpOpenResp, TermEvent, TransferEvent, UpdateEvent, UpdateInfoDto, UpdaterStatusDto,
 };
 use crate::ipc::error::{AppError, AppResult};
-use crate::session::model::{Profile, Protocol, SecretKind, SessionId};
+use crate::session::model::{AuthRef, Profile, Protocol, SecretKind, SessionId};
 use crate::vault::SecretRef;
 
 // ---------------------------------------------------------------------------
@@ -393,7 +393,12 @@ pub async fn rdp_launch(
             "该配置不是 RDP 协议，请先在配置中选择 RDP",
         ));
     }
-    crate::transport::rdp::launch(&profile, &state.data_dir)
+    // RDP 密码同样只从 vault 解密到内存，交给凭据管理器写入；没填密码就交给 mstsc 弹窗。
+    let password = match &profile.auth {
+        AuthRef::Password { secret } => Some(state.vault.get(secret)?.to_string()),
+        _ => None,
+    };
+    crate::transport::rdp::launch(&profile, password.as_deref(), &state.data_dir)
 }
 
 // ---------------------------------------------------------------------------

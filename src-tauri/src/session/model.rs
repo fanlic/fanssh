@@ -101,6 +101,9 @@ pub struct RdpPrefs {
     pub admin_session: bool,
     #[serde(default)]
     pub gateway: Option<String>,
+    /// Windows 域/工作组，可选。写入 .rdp 与凭据管理器时拼成 `DOMAIN\user`。
+    #[serde(default)]
+    pub domain: Option<String>,
 }
 
 fn default_width() -> u32 {
@@ -124,6 +127,7 @@ impl Default for RdpPrefs {
             drive_redirect: false,
             admin_session: false,
             gateway: None,
+            domain: None,
         }
     }
 }

@@ -62,6 +62,7 @@ const EMPTY: FormState = {
     drive_redirect: false,
     admin_session: false,
     gateway: "",
+    domain: "",
   },
 };
 
@@ -113,6 +114,23 @@ function existingJumpKey(profile: Profile | null): { key: string | null; pass: s
   const auth = profile?.jump[0]?.auth;
   if (auth?.kind === "key") return { key: auth.key, pass: auth.passphrase ?? null };
   return { key: null, pass: null };
+}
+
+/**
+ * RDP 密码是可选的：留空不写凭据，启动 mstsc 后由系统弹窗输入。
+ * 填了则只写进 vault，profile 里只保留 secret id。
+ */
+async function buildRdpAuth(
+  initial: Profile | null,
+  label: string,
+  password: string,
+): Promise<AuthRef> {
+  if (password.trim()) {
+    const existing = existingPasswordSecret(initial);
+    const id = await vaultPut(existing, "password", `${label} RDP 密码`, password);
+    return { kind: "password", secret: id };
+  }
+  return initial?.auth.kind === "password" ? initial.auth : { kind: "none" };
 }
 
 export function SessionDialog({ open, initial, onClose, onSaved, onError }: Props) {
@@ -172,14 +190,17 @@ export function SessionDialog({ open, initial, onClose, onSaved, onError }: Prop
       if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error("端口不合法");
       if (form.protocol === "ssh" && !form.user.trim()) throw new Error("SSH 需要用户名");
 
-      const auth = await buildAuth(
-        form.authMode,
-        form.password,
-        form.keyText,
-        form.passphrase,
-        initial?.auth,
-        form.name.trim(),
-      );
+      const auth: AuthRef =
+        form.protocol === "rdp"
+          ? await buildRdpAuth(initial, form.name.trim(), form.password)
+          : await buildAuth(
+              form.authMode,
+              form.password,
+              form.keyText,
+              form.passphrase,
+              initial?.auth,
+              form.name.trim(),
+            );
 
       const jump = [];
       if (form.useJump && form.protocol === "ssh") {
@@ -209,15 +230,18 @@ export function SessionDialog({ open, initial, onClose, onSaved, onError }: Prop
         target: {
           host: form.host.trim(),
           port,
-          user: form.protocol === "rdp" ? form.user.trim() : form.user.trim(),
+          user: form.user.trim(),
         },
-        auth: form.protocol === "rdp" ? { kind: "none" } : auth,
+        auth,
         jump,
         tags: form.tags
           .split(/[,，]/)
           .map((tag) => tag.trim())
           .filter(Boolean),
-        options: form.protocol === "rdp" ? { rdp: form.rdp } : {},
+        options:
+          form.protocol === "rdp"
+            ? { rdp: { ...form.rdp, domain: (form.rdp.domain ?? "").trim() || null } }
+            : {},
       };
       const saved = await profileUpsert(profile);
       onSaved(saved);
@@ -278,9 +302,39 @@ export function SessionDialog({ open, initial, onClose, onSaved, onError }: Prop
             </label>
             <label>
               用户名
-              <input value={form.user} onChange={(e) => update("user", e.target.value)} placeholder="root" />
+              <input
+                value={form.user}
+                onChange={(e) => update("user", e.target.value)}
+                placeholder={form.protocol === "rdp" ? "Administrator" : "root"}
+              />
             </label>
           </div>
+
+          {form.protocol === "rdp" && (
+            <>
+              <div className="section-title">登录凭据（写入 Windows 凭据管理器，不落配置文件）</div>
+              <div className="form-grid">
+                <label>
+                  域 / 工作组（可选）
+                  <input
+                    value={form.rdp.domain ?? ""}
+                    onChange={(e) => update("rdp", { ...form.rdp, domain: e.target.value })}
+                    placeholder="CORP 或 .（本机账户）"
+                  />
+                </label>
+                <label>
+                  密码
+                  <span className="muted">（留空则启动后由 mstsc 弹窗输入）</span>
+                  <input
+                    type="password"
+                    value={form.password}
+                    onChange={(e) => update("password", e.target.value)}
+                    placeholder={existingPasswordSecret(initial) ? "••••••••（留空沿用已保存密码）" : ""}
+                  />
+                </label>
+              </div>
+            </>
+          )}
 
           {form.protocol === "ssh" && (
             <>
