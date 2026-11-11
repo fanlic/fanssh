@@ -101,6 +101,35 @@ jobs:
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
+          name: FanSSH ${{ github.ref_name }}
+          body: |
+            Windows 终端与运维客户端 FanSSH 的 Windows x64 构建产物。
+
+            ## 下载哪个文件
+
+            | 文件 | 用途 |
+            | --- | --- |
+            | `FanSSH_*_x64-setup.exe` | NSIS 安装包：双击安装，写入 Program Files 与开始菜单快捷方式，适合长期使用 |
+            | `FanSSH-portable-windows-x64.zip` | 便携版：解压即用，不写系统目录，适合拷到 U 盘或临时机器 |
+
+            ## 便携版怎么用
+
+            1. 把 zip 解压到任意目录（路径不要含中文或空格以外的特殊字符）。
+            2. 直接双击 `FanSSH.exe` 运行，无需安装。
+            3. 压缩包内的 `portable.marker` 会让应用把配置与加密凭据写到 exe 同级的 `data/` 目录；
+               迁移或卸载时连同该目录一起带走/删除即可。
+            4. 便携版不要与安装版共用同一个目录。
+
+            ## 安装版说明
+
+            - 安装包与便携版 exe 均**未做代码签名**。首次运行 Windows SmartScreen 可能提示
+              “Windows 已保护你的电脑”，选择“更多信息”→“仍要运行”即可。
+            - 凭据使用 Windows DPAPI 加密，与当前 Windows 用户绑定；换用户或换机器后需要重新录入密码。
+
+            ## 本版本状态
+
+            这是 v1 骨架的首个可运行构建：SSH 终端、会话管理、SFTP、AI 侧边栏、RDP 调用均已实现；
+            仍存在已知缺口（SSH 未接 known_hosts、AI 非流式、SFTP 无断点续传等），详见仓库 README。
           files: |
             dist-artifacts/fanssh-nsis-installer/*.exe
             dist-artifacts/fanssh-portable-windows-x64/*.zip
