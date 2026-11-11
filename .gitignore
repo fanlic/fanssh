@@ -1,0 +1,21 @@
+# 依赖与构建产物
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+portable/
+FanSSH-portable-*.zip
+
+# 日志与系统文件
+*.log
+.DS_Store
+
+# 运行期数据与凭据：一律不入库
+data/
+*.rdp
+vault.json
+profiles.json
+settings.json
+secret.key
+.env
+.env.*

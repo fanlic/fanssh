@@ -1,0 +1,161 @@
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use crate::session::model::ChatMessage;
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum SessionState {
+    Connecting,
+    Authenticating,
+    Ready,
+    Closed { reason: String },
+}
+
+/// 终端流事件。高频数据走 Tauri Channel，不走全局事件总线。
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TermEvent {
+    State {
+        state: SessionState,
+    },
+    Data {
+        seq: u64,
+        text: String,
+    },
+    Title {
+        title: String,
+    },
+    Exit {
+        code: Option<i32>,
+        reason: Option<String>,
+    },
+    Error {
+        code: String,
+        message: String,
+    },
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TransferEvent {
+    Start {
+        id: Uuid,
+        name: String,
+        direction: String,
+        total: u64,
+    },
+    Progress {
+        id: Uuid,
+        done: u64,
+        total: u64,
+        speed_bps: u64,
+        direction: String,
+    },
+    Done {
+        id: Uuid,
+        name: String,
+        remote_path: String,
+        local_path: Option<String>,
+        direction: String,
+    },
+    Error {
+        id: Uuid,
+        name: String,
+        message: String,
+        direction: String,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RemoteEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub is_symlink: bool,
+    pub size: u64,
+    pub mode: Option<u32>,
+    pub mtime: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SftpOpenResp {
+    pub sftp_id: Uuid,
+    pub home: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AiSettingsInput {
+    pub provider: String,
+    pub base_url: String,
+    pub model: String,
+    #[serde(default = "default_temperature")]
+    pub temperature: f32,
+    #[serde(default)]
+    pub secret_id: Option<Uuid>,
+    #[serde(default = "default_max_context_kb")]
+    pub max_context_kb: u32,
+}
+
+fn default_temperature() -> f32 {
+    0.2
+}
+fn default_max_context_kb() -> u32 {
+    32
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct AiSettingsView {
+    pub provider: String,
+    pub base_url: String,
+    pub model: String,
+    pub temperature: f32,
+    pub secret_id: Option<Uuid>,
+    pub max_context_kb: u32,
+    pub has_key: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Nl2CmdResult {
+    pub command: String,
+    pub shell: String,
+    pub explanation: String,
+    pub risk: String,
+    pub requires_sudo: bool,
+    pub assumptions: Vec<String>,
+    /// 命中本地硬拦截规则，禁止“插入并执行”。
+    pub blocked: bool,
+    pub raw: Option<String>,
+}
+
+impl Default for Nl2CmdResult {
+    fn default() -> Self {
+        Self {
+            command: String::new(),
+            shell: "bash".to_string(),
+            explanation: String::new(),
+            risk: "high".to_string(),
+            requires_sudo: false,
+            assumptions: vec![],
+            blocked: true,
+            raw: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AiChatRequest {
+    pub messages: Vec<ChatMessage>,
+    /// chat | explain
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub context: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RdpHandleDto {
+    pub pid: Option<u32>,
+    pub rdp_file: String,
+}
