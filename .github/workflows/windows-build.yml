@@ -22,6 +22,8 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: read
+    env:
+      HAS_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
 
     steps:
       - name: Checkout
@@ -51,7 +53,20 @@ jobs:
       - name: Type check & build frontend
         run: npm run build
 
+      - name: Enable updater artifacts
+        if: env.HAS_SIGNING_KEY == 'true'
+        shell: pwsh
+        run: |
+          # 只有配置了签名私钥才生成更新包与 .sig，避免未配置密钥时构建失败
+          $path = "src-tauri/tauri.conf.json"
+          $conf = Get-Content $path -Raw | ConvertFrom-Json
+          $conf.bundle | Add-Member -NotePropertyName createUpdaterArtifacts -NotePropertyValue $true -Force
+          $conf | ConvertTo-Json -Depth 20 | Set-Content -Encoding utf8 $path
+
       - name: Build Tauri bundle (NSIS)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build -- --bundles nsis
 
       - name: Verify build artifacts
@@ -70,6 +85,39 @@ jobs:
           # 存在此标记时，应用把配置与凭据写到 exe 同级的 data/ 目录
           New-Item -ItemType File -Force -Path "portable/portable.marker" | Out-Null
           Compress-Archive -Path "portable/*" -DestinationPath "FanSSH-portable-windows-x64.zip" -Force
+
+      - name: Generate latest.json
+        if: env.HAS_SIGNING_KEY == 'true'
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter *.exe | Select-Object -First 1
+          if (-not $exe) { throw "未找到 NSIS 安装包" }
+          $sigFile = "$($exe.FullName).sig"
+          if (-not (Test-Path $sigFile)) { throw "未找到签名文件 $sigFile" }
+          $sig = (Get-Content $sigFile -Raw).Trim()
+          $conf = Get-Content "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
+          $version = $conf.version
+          # 资产发布在公开更新通道仓库，tag 即版本号
+          $assetUrl = "https://github.com/${{ vars.UPDATES_REPO || 'fanlic/fanssh-updates' }}/releases/download/$version/$($exe.Name)"
+          $notes = "FanSSH $version。安装版可在应用内「设置 → 检查更新」升级；便携版请下载新的便携包。"
+          $latest = [ordered]@{
+            version   = $version
+            notes     = $notes
+            pub_date  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = [ordered]@{
+              "windows-x86_64" = [ordered]@{ signature = $sig; url = $assetUrl }
+            }
+          }
+          $latest | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 latest.json
+          Get-Content latest.json
+
+      - name: Upload latest.json
+        if: env.HAS_SIGNING_KEY == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fanssh-latest-json
+          path: latest.json
+          if-no-files-found: error
 
       - name: Upload NSIS installer
         uses: actions/upload-artifact@v4
@@ -92,11 +140,44 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      HAS_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+      HAS_UPDATES_TOKEN: ${{ secrets.UPDATES_TOKEN != '' }}
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist-artifacts
+
+      - name: Read version from latest.json
+        id: meta
+        if: env.HAS_SIGNING_KEY == 'true'
+        run: echo "version=$(jq -r .version dist-artifacts/fanssh-latest-json/latest.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to update channel
+        if: env.HAS_SIGNING_KEY == 'true' && env.HAS_UPDATES_TOKEN == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: ${{ vars.UPDATES_REPO || 'fanlic/fanssh-updates' }}
+          token: ${{ secrets.UPDATES_TOKEN }}
+          tag_name: ${{ steps.meta.outputs.version }}
+          name: FanSSH ${{ steps.meta.outputs.version }}
+          body: |
+            FanSSH ${{ steps.meta.outputs.version }} 更新通道。
+
+            这里只放安装包、便携包和自动更新用的 `latest.json`，源码在私有仓库。
+
+            - 安装包 `FanSSH_*_x64-setup.exe`：已安装用户无需手动下载，应用内「设置 → 检查更新」即可升级。
+            - 便携包 `FanSSH-portable-windows-x64.zip`：便携版不支持自更新，请下载新版 zip 解压覆盖。
+            - `latest.json`：自动更新清单，客户端固定从这里读取。
+
+            构建未做代码签名，首次运行可能出现 SmartScreen 提示，选择“更多信息 → 仍要运行”。
+          files: |
+            dist-artifacts/fanssh-nsis-installer/*.exe
+            dist-artifacts/fanssh-portable-windows-x64/*.zip
+            dist-artifacts/fanssh-latest-json/latest.json
+          draft: false
+          make_latest: true
 
       - name: Publish release assets
         uses: softprops/action-gh-release@v2

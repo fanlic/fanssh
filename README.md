@@ -80,7 +80,67 @@ npm run tauri build -- --bundles nsis
 - 流程：安装 Node/Rust → `npm ci` → `npm run build` → `npm run tauri build -- --bundles nsis` → 打包便携版 zip。
 - 产物：`fanssh-nsis-installer`（安装包）与 `fanssh-portable-windows-x64`（便携版 zip）两个 artifact。
 - 推送 `v*` 标签时，额外创建 GitHub Release 并附带上述产物。
-- 工作流中不包含任何账号、邮箱或令牌，使用 GitHub 自动提供的 `GITHUB_TOKEN`。
+- 配置了签名私钥后，构建会生成 `.sig` 与 `latest.json`，并把安装包、便携包、`latest.json` 发布到公开更新通道仓库（默认 `fanlic/fanssh-updates`，可用仓库变量 `UPDATES_REPO` 覆盖）。
+- 工作流中不包含任何账号、邮箱或令牌：源码仓库用 `GITHUB_TOKEN`，跨仓库发布用 secret `UPDATES_TOKEN`。
+
+## 自动更新
+
+安装版通过 `tauri-plugin-updater` 自更新，重启用 `tauri-plugin-process` 的 relaunch。入口在应用右上角「设置 → 检查更新」，会显示当前版本、检测结果、更新日志与下载进度，下载安装前需要二次确认。便携版不参与自更新，只提示去更新通道下载新的 zip。
+
+### 更新源（endpoint）
+
+地址只写在 [tauri.conf.json](src-tauri/tauri.conf.json) 的 `plugins.updater.endpoints`，Rust 代码不写死：
+
+```json
+"updater": {
+  "endpoints": ["https://github.com/fanlic/fanssh-updates/releases/latest/download/latest.json"],
+  "pubkey": "<你的公钥>"
+}
+```
+
+换更新源（自建 CDN、换仓库、fork）只改这一行后重新构建即可。客户端固定请求该地址，因此 `latest.json` 必须发布在这个 URL 上。
+
+### 签名密钥（一次性）
+
+在仓库外生成并保存密钥，**不要提交**：
+
+```bash
+npx tauri signer generate -w ~/keys/fanssh.key
+# 私钥：~/keys/fanssh.key
+# 公钥：~/keys/fanssh.key.pub
+```
+
+把 `fanssh.key.pub` 的完整内容填到 `plugins.updater.pubkey`（替换 `REPLACE_WITH_PUBLIC_KEY_FROM_TAURI_SIGNER`）。丢失私钥或更换密钥后，已安装的旧版本将无法验证新包，只能让用户手动重装。
+
+### CI 需要配置的 secrets
+
+在源码仓库 `Settings → Secrets and variables → Actions` 添加：
+
+| 名称 | 取值来源 |
+| --- | --- |
+| `TAURI_SIGNING_PRIVATE_KEY` | `~/keys/fanssh.key` 的完整内容（含 `untrusted comment` 行） |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | 生成密钥时设置的密码 |
+| `UPDATES_TOKEN` | 对 `fanlic/fanssh-updates` 有 `contents: write` 权限的 PAT（用于跨仓库发布） |
+
+未配置 `TAURI_SIGNING_PRIVATE_KEY` 时，CI 会跳过签名与 `latest.json`，仍可正常产出未签名的安装包（此时应用内检查更新不可用）。
+
+本地想验证更新包时，把 `bundle.createUpdaterArtifacts` 手动改为 `true`，并设置 `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 两个环境变量后构建。
+
+### latest.json 结构
+
+```json
+{
+  "version": "1.0.1",
+  "notes": "本次更新说明",
+  "pub_date": "2026-11-11T12:00:00Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "<安装包的 .sig 内容>",
+      "url": "https://github.com/fanlic/fanssh-updates/releases/download/1.0.1/FanSSH_1.0.1_x64-setup.exe"
+    }
+  }
+}
+```
 
 ## 数据与安全
 

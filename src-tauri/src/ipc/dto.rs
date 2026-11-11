@@ -159,3 +159,42 @@ pub struct RdpHandleDto {
     pub pid: Option<u32>,
     pub rdp_file: String,
 }
+
+// ---------------------------------------------------------------------------
+// 自动更新
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdaterStatusDto {
+    /// 当前运行版本（来自 tauri.conf.json）
+    pub current_version: String,
+    /// 实际使用的更新源地址（来自 tauri.conf.json）
+    pub endpoint: String,
+    /// 更新通道的 Releases 页面，便携版据此提示下载新包
+    pub channel_url: String,
+    /// 便携版不执行自更新，只提示去下载新 zip
+    pub portable: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInfoDto {
+    pub version: String,
+    pub current_version: String,
+    pub notes: Option<String>,
+    pub date: Option<String>,
+    /// 下载安装包的直链（来自 latest.json 的 platforms.url）
+    pub url: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum UpdateEvent {
+    Downloading,
+    Progress {
+        downloaded: u64,
+        total: Option<u64>,
+    },
+    Installed,
+}

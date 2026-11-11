@@ -10,6 +10,9 @@ import type {
   SftpOpenResp,
   TermEvent,
   TransferEvent,
+  UpdateEvent,
+  UpdateInfo,
+  UpdaterStatus,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -165,6 +168,26 @@ export function aiNl2Cmd(prompt: string, context: string | null): Promise<Nl2Cmd
 
 export function rdpLaunch(profileId: string): Promise<RdpHandleDto> {
   return invoke("rdp_launch", { profileId });
+}
+
+// ---------------------------------------------------------------------------
+// 自动更新
+// ---------------------------------------------------------------------------
+
+export function updaterStatus(): Promise<UpdaterStatus> {
+  return invoke("updater_status");
+}
+
+export function updaterCheck(): Promise<UpdateInfo | null> {
+  return invoke("updater_check");
+}
+
+export async function updaterInstall(
+  onEvent: (event: UpdateEvent) => void,
+): Promise<void> {
+  const channel = new Channel<UpdateEvent>();
+  channel.onmessage = onEvent;
+  return invoke("updater_install", { onEvent: channel });
 }
 
 /** 把后端错误对象转成可读文本 */

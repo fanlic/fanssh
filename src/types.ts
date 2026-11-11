@@ -140,6 +140,26 @@ export interface RdpHandleDto {
   rdp_file: string;
 }
 
+export interface UpdaterStatus {
+  currentVersion: string;
+  endpoint: string;
+  channelUrl: string;
+  portable: boolean;
+}
+
+export interface UpdateInfo {
+  version: string;
+  currentVersion: string;
+  notes: string | null;
+  date: string | null;
+  url: string | null;
+}
+
+export type UpdateEvent =
+  | { type: "downloading" }
+  | { type: "progress"; downloaded: number; total: number | null }
+  | { type: "installed" };
+
 /** 后端统一错误结构 */
 export interface AppErrorShape {
   code: string;

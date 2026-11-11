@@ -7,6 +7,7 @@ import { SftpPanel } from "./components/SftpPanel";
 import { TabBar } from "./components/TabBar";
 import { TerminalPane } from "./components/TerminalPane";
 import { AiSidebar } from "./components/AiSidebar";
+import { SettingsDialog } from "./components/SettingsDialog";
 import { useAppStore } from "./store";
 import type { Profile } from "./types";
 
@@ -28,6 +29,7 @@ export default function App() {
   const setSftpProfileId = useAppStore((s) => s.setSftpProfileId);
 
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [editing, setEditing] = useState<Profile | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
 
@@ -150,6 +152,9 @@ export default function App() {
           <button className={`ghost small${aiOpen ? " is-on" : ""}`} onClick={toggleAi}>
             AI 面板
           </button>
+          <button className="ghost small" onClick={() => setSettingsOpen(true)}>
+            设置
+          </button>
         </div>
 
         <TabBar onSplit={handleSplit} />
@@ -200,6 +205,12 @@ export default function App() {
       </section>
 
       {aiOpen && <AiSidebar />}
+
+      <SettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onNotice={notify}
+      />
 
       <SessionDialog
         open={dialogOpen}

@@ -17,5 +17,8 @@ vault.json
 profiles.json
 settings.json
 secret.key
+# 更新签名私钥：放在仓库外（如 /home/<user>/fanssh/keys/），此处再兜一层
+*.key
+keys/
 .env
 .env.*

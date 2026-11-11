@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "FanSSH",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "identifier": "com.fanssh.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -29,6 +29,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "createUpdaterArtifacts": false,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -41,6 +42,17 @@
         "displayLanguageSelector": false,
         "installerIcon": "icons/icon.ico",
         "languages": ["SimpChinese", "English"]
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/fanlic/fanssh-updates/releases/latest/download/latest.json"
+      ],
+      "pubkey": "REPLACE_WITH_PUBLIC_KEY_FROM_TAURI_SIGNER",
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

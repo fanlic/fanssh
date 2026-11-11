@@ -16,6 +16,8 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let data_dir = app::resolve_data_dir(app.handle())?;
             log::info!("[fanssh] 数据目录: {}", data_dir.display());
@@ -47,6 +49,9 @@ pub fn run() {
             ai_chat,
             ai_nl2cmd,
             rdp_launch,
+            updater_status,
+            updater_check,
+            updater_install,
         ])
         .run(tauri::generate_context!())
         .expect("FanSSH 启动失败");

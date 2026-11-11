@@ -9,7 +9,7 @@ use crate::app::settings::AiSettingsFile;
 use crate::app::AppState;
 use crate::ipc::dto::{
     AiChatRequest, AiSettingsInput, AiSettingsView, Nl2CmdResult, RdpHandleDto, RemoteEntry,
-    SftpOpenResp, TermEvent, TransferEvent,
+    SftpOpenResp, TermEvent, TransferEvent, UpdateEvent, UpdateInfoDto, UpdaterStatusDto,
 };
 use crate::ipc::error::{AppError, AppResult};
 use crate::session::model::{Profile, Protocol, SecretKind, SessionId};
@@ -394,4 +394,121 @@ pub async fn rdp_launch(
         ));
     }
     crate::transport::rdp::launch(&profile, &state.data_dir)
+}
+
+// ---------------------------------------------------------------------------
+// 自动更新
+// ---------------------------------------------------------------------------
+
+/// 更新源地址来自 tauri.conf.json 的 plugins.updater.endpoints，
+/// 不在代码里写死；改地址只需改配置或按 README 用构建期变量覆盖。
+fn configured_endpoint(app: &tauri::AppHandle) -> Option<String> {
+    app.config()
+        .plugins
+        .0
+        .get("updater")
+        .and_then(|value| value.get("endpoints"))
+        .and_then(|value| value.as_array())
+        .and_then(|list| list.first())
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+}
+
+/// 把 latest.json 的地址还原成更新通道的 Releases 页面，供便携版提示下载。
+fn channel_url(endpoint: &str) -> String {
+    match endpoint.split("/releases/").next() {
+        Some(base) if !base.is_empty() && base.len() < endpoint.len() => format!("{base}/releases"),
+        _ => endpoint.to_string(),
+    }
+}
+
+/// 便携版（exe 同级存在 portable.marker）不做自更新，只提示下载新的 zip。
+fn is_portable() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("portable.marker").exists()))
+        .unwrap_or(false)
+}
+
+fn build_updater(app: &tauri::AppHandle) -> AppResult<tauri_plugin_updater::Updater> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    app.updater().map_err(|e| {
+        AppError::new(
+            "updater.config",
+            format!("更新器初始化失败：{e}（请确认 tauri.conf.json 中 plugins.updater 的 pubkey 与 endpoints 已配置）"),
+        )
+    })
+}
+
+#[tauri::command]
+pub async fn updater_status(app: tauri::AppHandle) -> AppResult<UpdaterStatusDto> {
+    let endpoint = configured_endpoint(&app).unwrap_or_default();
+    Ok(UpdaterStatusDto {
+        current_version: app.package_info().version.to_string(),
+        channel_url: channel_url(&endpoint),
+        endpoint,
+        portable: is_portable(),
+    })
+}
+
+#[tauri::command]
+pub async fn updater_check(app: tauri::AppHandle) -> AppResult<Option<UpdateInfoDto>> {
+    if is_portable() {
+        return Err(AppError::new(
+            "updater.portable",
+            "便携版不支持自动更新，请到 Release 页面下载新的便携 zip",
+        ));
+    }
+    let updater = build_updater(&app)?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| AppError::new("updater.check_failed", format!("检查更新失败：{e}")))?;
+    Ok(update.map(|update| UpdateInfoDto {
+        version: update.version.to_string(),
+        current_version: update.current_version.to_string(),
+        notes: update.body.clone(),
+        date: update.date.as_ref().map(|date| date.to_string()),
+        url: None,
+    }))
+}
+
+#[tauri::command]
+pub async fn updater_install(
+    app: tauri::AppHandle,
+    on_event: TauriChannel<UpdateEvent>,
+) -> AppResult<()> {
+    if is_portable() {
+        return Err(AppError::new(
+            "updater.portable",
+            "便携版不支持自动更新，请到 Release 页面下载新的便携 zip",
+        ));
+    }
+    let updater = build_updater(&app)?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| AppError::new("updater.check_failed", format!("检查更新失败：{e}")))?
+        .ok_or_else(|| AppError::new("updater.none", "当前已是最新版本"))?;
+
+    let channel = on_event.clone();
+    let _ = on_event.send(UpdateEvent::Downloading);
+    let mut downloaded: u64 = 0;
+    let mut last_emit = std::time::Instant::now();
+    update
+        .download_and_install(
+            move |chunk: usize, total: Option<u64>| {
+                downloaded += chunk as u64;
+                if last_emit.elapsed().as_millis() >= 120 {
+                    last_emit = std::time::Instant::now();
+                    let _ = channel.send(UpdateEvent::Progress { downloaded, total });
+                }
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| AppError::new("updater.install_failed", format!("下载或安装失败：{e}")))?;
+    let _ = on_event.send(UpdateEvent::Installed);
+    Ok(())
 }
