@@ -1,6 +1,6 @@
 [package]
 name = "fanssh"
-version = "1.0.1"
+version = "1.0.2"
 description = "FanSSH - Windows terminal & operations client"
 authors = ["FanSSH"]
 edition = "2021"
