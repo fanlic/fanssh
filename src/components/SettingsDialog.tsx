@@ -76,15 +76,15 @@ export function SettingsDialog({ open, onClose, onNotice }: Props) {
     bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`;
 
   return (
-    <div className="modal-mask" onClick={onClose}>
-      <div className="modal" onClick={(event) => event.stopPropagation()}>
-        <div className="modal-head">
+    <div className="dlg-mask" onClick={onClose}>
+      <div className="dlg dlg-settings" onClick={(event) => event.stopPropagation()}>
+        <div className="dlg-head">
           <h3>设置 · 关于</h3>
-          <button className="icon" onClick={onClose} title="关闭">
+          <button className="icon-btn sm" onClick={onClose} title="关闭">
             ×
           </button>
         </div>
-        <div className="modal-body">
+        <div className="dlg-body">
           <div className="section-title">版本信息</div>
           <div className="update-row">
             <span>当前版本</span>
@@ -157,28 +157,28 @@ export function SettingsDialog({ open, onClose, onNotice }: Props) {
 
           {error && <p className="update-error">{error}</p>}
         </div>
-        <div className="modal-foot">
+        <div className="dlg-foot">
           {phase === "confirm" ? (
             <>
-              <button className="ghost" onClick={() => setPhase("available")}>
+              <button className="btn-ghost" onClick={() => setPhase("available")}>
                 取消
               </button>
-              <button className="primary" onClick={handleInstall}>
+              <button className="btn-primary" onClick={handleInstall}>
                 确认更新
               </button>
             </>
           ) : phase === "available" ? (
             <>
-              <button className="ghost" onClick={onClose}>
+              <button className="btn-ghost" onClick={onClose}>
                 稍后
               </button>
-              <button className="primary" onClick={() => setPhase("confirm")}>
+              <button className="btn-primary" onClick={() => setPhase("confirm")}>
                 下载并安装
               </button>
             </>
           ) : phase === "installed" ? (
             <button
-              className="primary"
+              className="btn-primary"
               onClick={() => {
                 relaunch().catch((err) => onNotice(errorText(err), "error"));
               }}
@@ -187,11 +187,11 @@ export function SettingsDialog({ open, onClose, onNotice }: Props) {
             </button>
           ) : (
             <>
-              <button className="ghost" onClick={onClose}>
+              <button className="btn-ghost" onClick={onClose}>
                 关闭
               </button>
               <button
-                className="primary"
+                className="btn-primary"
                 onClick={handleCheck}
                 disabled={phase === "checking" || phase === "installing" || status?.portable === true}
                 title={status?.portable ? "便携版请下载新版 zip" : undefined}

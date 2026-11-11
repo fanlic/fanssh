@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { errorText, profileExport, profileImport, rdpLaunch } from "./api";
-import { SessionSidebar } from "./components/SessionSidebar";
+import { errorText, profileExport, profileImport, rdpLaunch, updaterStatus } from "./api";
+import { AiSidebar } from "./components/AiSidebar";
+import { Icon } from "./components/Icon";
 import { SessionDialog } from "./components/SessionDialog";
+import { SessionSidebar } from "./components/SessionSidebar";
+import { SettingsDialog } from "./components/SettingsDialog";
 import { SftpPanel } from "./components/SftpPanel";
 import { TabBar } from "./components/TabBar";
 import { TerminalPane } from "./components/TerminalPane";
-import { AiSidebar } from "./components/AiSidebar";
-import { SettingsDialog } from "./components/SettingsDialog";
 import { useAppStore } from "./store";
 import type { Profile } from "./types";
 
@@ -24,7 +25,6 @@ export default function App() {
   const sftpProfileId = useAppStore((s) => s.sftpProfileId);
   const toggleAi = useAppStore((s) => s.toggleAi);
   const loadProfiles = useAppStore((s) => s.loadProfiles);
-  const openProfileTab = useAppStore((s) => s.openProfileTab);
   const openProfileInSplit = useAppStore((s) => s.openProfileInSplit);
   const setSftpProfileId = useAppStore((s) => s.setSftpProfileId);
 
@@ -32,9 +32,15 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [editing, setEditing] = useState<Profile | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [searchSignal, setSearchSignal] = useState(0);
+  const [version, setVersion] = useState("1.0.3");
 
   useEffect(() => {
     void loadProfiles();
+    updaterStatus()
+      .then((status) => setVersion(status.currentVersion))
+      .catch(() => undefined);
   }, [loadProfiles]);
 
   useEffect(() => {
@@ -43,16 +49,38 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [notice]);
 
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      const key = event.key.toLowerCase();
+      if (key === "k") {
+        event.preventDefault();
+        setSidebarOpen(true);
+        setSearchSignal((value) => value + 1);
+      } else if (key === "b") {
+        event.preventDefault();
+        setSidebarOpen((value) => !value);
+      } else if (key === "j") {
+        event.preventDefault();
+        toggleAi();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [toggleAi]);
+
   const activeTab = tabs.find((tab) => tab.id === activeTabId);
   const activePane = activeTab?.panes[activeTab.activePane] ?? null;
   const sftpProfile = useMemo(
     () => profiles.find((profile) => profile.id === sftpProfileId) ?? null,
     [profiles, sftpProfileId],
   );
+  const activeProfile = useMemo(
+    () => profiles.find((profile) => profile.id === activePane?.profileId) ?? null,
+    [profiles, activePane],
+  );
 
   const notify = (message: string, kind: "info" | "error" = "info") => setNotice({ message, kind });
-
-  const sshProfiles = profiles.filter((profile) => profile.protocol === "ssh");
 
   const handleNew = () => {
     setEditing(null);
@@ -119,92 +147,129 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <SessionSidebar
-        onNew={handleNew}
-        onEdit={handleEdit}
-        onImport={handleImport}
-        onExport={handleExport}
-        onRdp={handleRdp}
-        onNotice={notify}
-      />
-
-      <section className="workspace">
-        <div className="workspace-head">
-          <select
-            className="quick-connect"
-            value=""
-            onChange={(event) => {
-              const profile = profiles.find((item) => item.id === event.target.value);
-              if (profile) openProfileTab(profile);
-            }}
+      <header className="titlebar">
+        <button
+          className="icon-btn tb-toggle"
+          title={sidebarOpen ? "收起侧栏 (Ctrl B)" : "展开侧栏 (Ctrl B)"}
+          onClick={() => setSidebarOpen((value) => !value)}
+        >
+          <Icon name="split" size={14} />
+        </button>
+        <div className="tb-left">
+          <span className="brand-mark">
+            <Icon name="term" size={12} />
+          </span>
+          <span className="brand-name">FanSSH</span>
+          <span className="brand-ver">v{version}</span>
+          <span className="tb-div" />
+          <span className="tb-ws">本地工作区</span>
+        </div>
+        <button className="tb-quick" onClick={() => { setSidebarOpen(true); setSearchSignal((v) => v + 1); }}>
+          <Icon name="search" size={13} />
+          <span>快速连接或搜索会话</span>
+          <kbd>Ctrl K</kbd>
+        </button>
+        <div className="tb-right">
+          <button className="icon-btn" title="设置" onClick={() => setSettingsOpen(true)}>
+            <Icon name="gear" size={15} />
+          </button>
+          <button
+            className={`icon-btn${aiOpen ? " is-on" : ""}`}
+            title="AI 面板 (Ctrl J)"
+            onClick={toggleAi}
           >
-            <option value="">快速连接 SSH…</option>
-            {sshProfiles.map((profile) => (
-              <option key={profile.id} value={profile.id}>
-                {profile.name} · {profile.target.user}@{profile.target.host}
-              </option>
-            ))}
-          </select>
-          <div className="spacer" />
-          <button className="ghost small" onClick={handleNew}>
-            + 新建
-          </button>
-          <button className={`ghost small${aiOpen ? " is-on" : ""}`} onClick={toggleAi}>
-            AI 面板
-          </button>
-          <button className="ghost small" onClick={() => setSettingsOpen(true)}>
-            设置
+            <Icon name="spark" size={15} />
           </button>
         </div>
+      </header>
 
-        <TabBar onSplit={handleSplit} />
+      <div className="app-body">
+        {sidebarOpen && (
+          <SessionSidebar
+            onNew={handleNew}
+            onEdit={handleEdit}
+            onImport={handleImport}
+            onExport={handleExport}
+            onRdp={handleRdp}
+            onNotice={notify}
+            focusSignal={searchSignal}
+          />
+        )}
 
-        <div className="panes-host">
-          {tabs.map((tab) => (
-            <div
-              key={tab.id}
-              className={`tab-panes direction-${tab.direction}${tab.id === activeTabId ? "" : " is-hidden"}`}
-            >
-              {tab.panes.map((pane, index) => (
-                <TerminalPane
-                  key={pane.key}
-                  tabId={tab.id}
-                  pane={pane}
-                  active={tab.id === activeTabId && index === tab.activePane}
-                />
+        <main className="workspace">
+          <TabBar onSplit={handleSplit} />
+
+          <div className="stage">
+            <div className="panes-host">
+              {tabs.map((tab) => (
+                <div
+                  key={tab.id}
+                  className={`tab-panes direction-${tab.direction}${tab.id === activeTabId ? "" : " is-hidden"}`}
+                >
+                  {tab.panes.map((pane, index) => (
+                    <TerminalPane
+                      key={pane.key}
+                      tabId={tab.id}
+                      pane={pane}
+                      active={tab.id === activeTabId && index === tab.activePane}
+                    />
+                  ))}
+                </div>
               ))}
+              {tabs.length === 0 && (
+                <div className="stage-empty">
+                  <div className="se-card">
+                    <span className="se-logo">
+                      <Icon name="term" size={20} />
+                    </span>
+                    <h2>FanSSH</h2>
+                    <p>SSH 终端 · SFTP · AI 运维助手 · RDP 调用</p>
+                    <div className="se-actions">
+                      <button className="btn-primary" onClick={handleNew}>
+                        新建服务器配置
+                      </button>
+                      <button className="btn-ghost" onClick={() => { setSidebarOpen(true); setSearchSignal((v) => v + 1); }}>
+                        搜索已有会话
+                      </button>
+                    </div>
+                    <p className="se-hint">
+                      在左侧双击服务器即可打开终端，凭据经系统加密后单独存储在本地凭据库。
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
-          ))}
-          {tabs.length === 0 && (
-            <div className="empty-state">
-              <h2>FanSSH</h2>
-              <p>SSH 终端 · SFTP · AI 运维助手 · RDP 调用</p>
-              <div className="row center">
-                <button className="primary" onClick={handleNew}>
-                  新建服务器配置
-                </button>
-              </div>
-              <p className="muted">
-                在左侧双击服务器即可打开终端。凭据经系统加密后单独存储在本地凭据库。
-              </p>
-            </div>
-          )}
-        </div>
+          </div>
 
-        <div className="statusbar">
-          <span>
-            {activePane
-              ? `${activePane.profileName} · ${activePane.statusText}`
-              : "就绪"}
-          </span>
-          <div className="spacer" />
-          <span className="muted">
-            协议 SSH/RDP · SFTP {sftpProfile ? sftpProfile.name : "未打开"}
-          </span>
-        </div>
-      </section>
+          <footer className="statusbar">
+            <span className="sb-left">
+              <span className={`dot st-${activePane?.status ?? "idle"}`} />
+              <span className="sb-text">{activePane ? activePane.statusText : "就绪"}</span>
+              {activePane && <span className="sb-meta">{activePane.profileName}</span>}
+              {activeProfile && (
+                <span className="sb-meta mono">
+                  {activeProfile.target.user ? `${activeProfile.target.user}@` : ""}
+                  {activeProfile.target.host}
+                </span>
+              )}
+            </span>
+            <div className="spacer" />
+            {activeProfile?.protocol === "ssh" && (
+              <button className="sb-btn" onClick={() => setSftpProfileId(activeProfile.id)}>
+                <Icon name="transfer" size={12} />
+                SFTP
+              </button>
+            )}
+            <button className="sb-btn" onClick={() => setSettingsOpen(true)}>
+              <Icon name="refresh" size={12} />
+              检查更新
+            </button>
+            <span className="sb-meta">{profiles.length} 个配置</span>
+          </footer>
+        </main>
 
-      {aiOpen && <AiSidebar />}
+        {aiOpen && <AiSidebar />}
+      </div>
 
       <SettingsDialog
         open={settingsOpen}

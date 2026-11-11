@@ -5,28 +5,29 @@ import "@xterm/xterm/css/xterm.css";
 import { errorText, termClose, termInput, termOpen, termResize } from "../api";
 import { terminalRegistry } from "../lib/terminalRegistry";
 import { useAppStore, type PaneState } from "../store";
+import { Icon } from "./Icon";
 
 const THEME = {
   background: "#0d1117",
-  foreground: "#d6deeb",
+  foreground: "#e6edf3",
   cursor: "#7ee787",
   selectionBackground: "#264f78",
-  black: "#1b1f27",
-  red: "#ff6b6b",
-  green: "#7ee787",
-  yellow: "#ffd580",
-  blue: "#79b8ff",
-  magenta: "#d2a8ff",
-  cyan: "#56d4dd",
-  white: "#d6deeb",
-  brightBlack: "#5b6778",
-  brightRed: "#ff9d9d",
-  brightGreen: "#a8f0b0",
-  brightYellow: "#ffe3a3",
+  black: "#484f58",
+  red: "#ff7b72",
+  green: "#3fb950",
+  yellow: "#d29922",
+  blue: "#79c0ff",
+  magenta: "#bc8cff",
+  cyan: "#39c5cf",
+  white: "#b1bac4",
+  brightBlack: "#6e7681",
+  brightRed: "#ffa198",
+  brightGreen: "#56d364",
+  brightYellow: "#e3b341",
   brightBlue: "#a5d6ff",
-  brightMagenta: "#e2c5ff",
-  brightCyan: "#8be9fd",
-  brightWhite: "#ffffff",
+  brightMagenta: "#d2a8ff",
+  brightCyan: "#56d4dd",
+  brightWhite: "#f0f6fc",
 };
 
 interface Props {
@@ -46,6 +47,8 @@ export function TerminalPane({ tabId, pane, active }: Props) {
   const setPaneSession = useAppStore((s) => s.setPaneSession);
   const setPaneTitle = useAppStore((s) => s.setPaneTitle);
   const setActivePane = useAppStore((s) => s.setActivePane);
+  const closePane = useAppStore((s) => s.closePane);
+  const profile = useAppStore((s) => s.profiles.find((item) => item.id === pane.profileId));
 
   // 终端实例与会话生命周期：只随 pane.key 变化重建。
   useEffect(() => {
@@ -56,8 +59,8 @@ export function TerminalPane({ tabId, pane, active }: Props) {
     const term = new Terminal({
       fontFamily:
         '"Cascadia Mono", "JetBrains Mono", Consolas, "Noto Sans Mono CJK SC", monospace',
-      fontSize: 14,
-      lineHeight: 1.2,
+      fontSize: 13,
+      lineHeight: 1.4,
       cursorBlink: true,
       scrollback: 8000,
       theme: THEME,
@@ -181,12 +184,38 @@ export function TerminalPane({ tabId, pane, active }: Props) {
       className={`terminal-pane${active ? " is-active" : ""}`}
       onMouseDown={() => setActivePane(tabId, useAppStore.getState().tabs.find((t) => t.id === tabId)?.panes.findIndex((p) => p.key === pane.key) ?? 0)}
     >
+      <div className="pane-head">
+        <span className={`proto-tag ${profile?.protocol ?? "ssh"}`}>
+          {profile?.protocol === "rdp" ? "RDP" : "SSH"}
+        </span>
+        <span className="pane-name">{pane.profileName}</span>
+        <span className="pane-state">
+          <span className={`dot st-${pane.status}`} />
+          {pane.statusText}
+        </span>
+      </div>
       <div className="terminal-host" ref={hostRef} />
       {showOverlay && (
-        <div className="terminal-overlay">
-          <div className={`terminal-status status-${pane.status}`}>
-            <span className="dot" />
-            <span>{pane.statusText}</span>
+        <div className={`pane-overlay overlay-${pane.status}`}>
+          <div className="ov-card">
+            <span className="ov-icon">
+              {pane.status === "connecting" ? (
+                <span className="spinner" />
+              ) : (
+                <Icon name={pane.status === "error" ? "alert" : "plug"} size={18} />
+              )}
+            </span>
+            <div className="ov-title">
+              {pane.status === "connecting" ? "正在连接" : pane.status === "error" ? "连接失败" : "会话已断开"}
+            </div>
+            <div className="ov-desc">{pane.statusText}</div>
+            {pane.status !== "connecting" && (
+              <div className="ov-actions">
+                <button className="btn-ghost sm" onClick={() => closePane(tabId, pane.key)}>
+                  关闭面板
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

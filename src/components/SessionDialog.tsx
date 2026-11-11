@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { errorText, profileUpsert, vaultPut } from "../api";
 import type { AuthRef, Profile, Protocol, RdpPrefs } from "../types";
+import { Icon } from "./Icon";
 
 interface Props {
   open: boolean;
@@ -254,16 +255,41 @@ export function SessionDialog({ open, initial, onClose, onSaved, onError }: Prop
   };
 
   return (
-    <div className="modal-mask" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div className="modal">
-        <div className="modal-head">
+    <div className="dlg-mask" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <div className="dlg dlg-session">
+        <div className="dlg-head">
           <h2>{initial ? "编辑连接" : "新建连接"}</h2>
-          <button className="icon" onClick={onClose}>
-            ×
+          <div className="spacer" />
+          <button className="icon-btn sm" title="关闭" onClick={onClose}>
+            <Icon name="x" size={14} />
           </button>
         </div>
 
-        <div className="modal-body">
+        <div className="dlg-body">
+          <div className="dlg-seg" role="tablist">
+            <button
+              role="tab"
+              aria-selected={form.protocol === "ssh"}
+              className={form.protocol === "ssh" ? "is-active" : ""}
+              onClick={() => {
+                update("protocol", "ssh");
+                if (form.port === "3389") update("port", "22");
+              }}
+            >
+              SSH 终端
+            </button>
+            <button
+              role="tab"
+              aria-selected={form.protocol === "rdp"}
+              className={form.protocol === "rdp" ? "is-active" : ""}
+              onClick={() => {
+                update("protocol", "rdp");
+                if (form.port === "22") update("port", "3389");
+              }}
+            >
+              RDP 远程桌面
+            </button>
+          </div>
           <div className="form-grid">
             <label>
               名称 *
@@ -272,21 +298,6 @@ export function SessionDialog({ open, initial, onClose, onSaved, onError }: Prop
             <label>
               分组
               <input value={form.group} onChange={(e) => update("group", e.target.value)} placeholder="生产环境" />
-            </label>
-            <label>
-              协议
-              <select
-                value={form.protocol}
-                onChange={(e) => {
-                  const protocol = e.target.value as Protocol;
-                  update("protocol", protocol);
-                  if (protocol === "rdp" && form.port === "22") update("port", "3389");
-                  if (protocol === "ssh" && form.port === "3389") update("port", "22");
-                }}
-              >
-                <option value="ssh">SSH</option>
-                <option value="rdp">RDP（调用 mstsc.exe）</option>
-              </select>
             </label>
             <label>
               标签
@@ -514,13 +525,13 @@ export function SessionDialog({ open, initial, onClose, onSaved, onError }: Prop
           )}
         </div>
 
-        <div className="modal-foot">
+        <div className="dlg-foot">
           <span className="muted">密码/私钥加密保存在本地凭据库，不会写入配置文件。</span>
           <div className="spacer" />
-          <button className="ghost" onClick={onClose}>
+          <button className="btn-ghost" onClick={onClose}>
             取消
           </button>
-          <button className="primary" onClick={handleSave} disabled={saving}>
+          <button className="btn-primary" onClick={handleSave} disabled={saving}>
             {saving ? "保存中…" : "保存"}
           </button>
         </div>

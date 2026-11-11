@@ -3,6 +3,7 @@ import { aiChat, aiNl2Cmd, aiSettingsGet, aiSettingsSave, errorText, vaultPut } 
 import { terminalRegistry } from "../lib/terminalRegistry";
 import { activePaneSelector, useAppStore } from "../store";
 import type { ChatMessage, Nl2CmdResult } from "../types";
+import { Icon } from "./Icon";
 
 const RISK_LABEL: Record<string, string> = {
   low: "低风险",
@@ -17,6 +18,7 @@ export function AiSidebar() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [inserted, setInserted] = useState<string | null>(null);
 
   const [provider, setProvider] = useState("ollama");
   const [baseUrl, setBaseUrl] = useState("http://127.0.0.1:11434");
@@ -48,6 +50,12 @@ export function AiSidebar() {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, busy]);
+
+  useEffect(() => {
+    if (!inserted) return;
+    const timer = window.setTimeout(() => setInserted(null), 2600);
+    return () => window.clearTimeout(timer);
+  }, [inserted]);
 
   const saveSettings = async () => {
     setError(null);
@@ -137,6 +145,7 @@ export function AiSidebar() {
       setError("终端面板不存在，请先打开会话");
       return;
     }
+    setInserted(nlResult.command);
     setNlResult(null);
     setNlPrompt("");
   };
@@ -144,10 +153,21 @@ export function AiSidebar() {
   return (
     <aside className="ai-panel">
       <div className="ai-head">
-        <span>AI 助手</span>
+        <span className="ai-title">
+          <Icon name="spark" size={14} />
+          AI 助手
+        </span>
+        <span className="ai-model">
+          <span className="dot st-ready" />
+          {model}
+        </span>
         <div className="spacer" />
-        <button className="ghost small" onClick={() => setShowSettings((v) => !v)}>
-          设置
+        <button
+          className={`icon-btn sm${showSettings ? " is-on" : ""}`}
+          title="AI 设置"
+          onClick={() => setShowSettings((value) => !value)}
+        >
+          <Icon name="gear" size={14} />
         </button>
       </div>
 
@@ -168,27 +188,29 @@ export function AiSidebar() {
             模型
             <input value={model} onChange={(event) => setModel(event.target.value)} />
           </label>
-          <label>
-            Temperature
-            <input
-              type="number"
-              step="0.1"
-              min="0"
-              max="2"
-              value={temperature}
-              onChange={(event) => setTemperature(Number(event.target.value))}
-            />
-          </label>
-          <label>
-            上下文上限 (KB)
-            <input
-              type="number"
-              min="1"
-              max="128"
-              value={maxContextKb}
-              onChange={(event) => setMaxContextKb(Number(event.target.value))}
-            />
-          </label>
+          <div className="ai-settings-row">
+            <label>
+              Temperature
+              <input
+                type="number"
+                step="0.1"
+                min="0"
+                max="2"
+                value={temperature}
+                onChange={(event) => setTemperature(Number(event.target.value))}
+              />
+            </label>
+            <label>
+              上下文上限 (KB)
+              <input
+                type="number"
+                min="1"
+                max="128"
+                value={maxContextKb}
+                onChange={(event) => setMaxContextKb(Number(event.target.value))}
+              />
+            </label>
+          </div>
           <label>
             API Key {hasKey && <span className="muted">（已保存，留空不修改）</span>}
             <input
@@ -198,8 +220,8 @@ export function AiSidebar() {
               placeholder={hasKey ? "••••••••" : "sk-..."}
             />
           </label>
-          <div className="row">
-            <button className="primary small" onClick={saveSettings}>
+          <div className="ai-settings-foot">
+            <button className="btn-primary sm" onClick={saveSettings}>
               保存设置
             </button>
             <span className="muted">密钥只进凭据库，不回传前端</span>
@@ -207,42 +229,73 @@ export function AiSidebar() {
         </div>
       )}
 
+      <div className="ai-ctx">
+        <span className="ctx-pane">
+          <span className={`dot st-${pane?.status ?? "idle"}`} />
+          {pane ? pane.profileName : "未打开终端"}
+        </span>
+        <button className="btn-ghost sm" onClick={analyzeSelection} disabled={busy || !pane}>
+          <Icon name="search" size={12} />
+          分析选中内容
+        </button>
+      </div>
+
       {error && (
-        <div className="banner error" onClick={() => setError(null)}>
+        <div className="banner err" onClick={() => setError(null)}>
           {error}
         </div>
       )}
 
       <div className="ai-chat">
         {messages.length === 0 && (
-          <div className="hint">
-            选中终端里的报错后点「分析选中内容」，或直接在下方提问。
-            <br />
-            自然语言转命令默认只插入，不自动执行。
+          <div className="ai-empty">
+            <span className="ai-empty-icon">
+              <Icon name="spark" size={18} />
+            </span>
+            <div className="empty-title">运维助手就绪</div>
+            <p>
+              选中终端里的报错后点「分析选中内容」，或直接在下方提问。
+              自然语言转命令默认只插入，不自动执行。
+            </p>
           </div>
         )}
         {messages.map((message, index) => (
           <div className={`msg msg-${message.role}`} key={index}>
-            <div className="msg-role">{message.role === "user" ? "你" : "AI"}</div>
-            <pre>{message.content}</pre>
+            <div className="msg-role">
+              {message.role === "user" ? "你" : <Icon name="spark" size={11} />}
+            </div>
+            <div className="msg-body">
+              <pre>{message.content}</pre>
+            </div>
           </div>
         ))}
-        {busy && <div className="hint">模型思考中…</div>}
+        {busy && (
+          <div className="msg msg-assistant is-loading">
+            <div className="msg-role">
+              <Icon name="spark" size={11} />
+            </div>
+            <div className="msg-body">
+              <span className="typing">
+                <i />
+                <i />
+                <i />
+              </span>
+            </div>
+          </div>
+        )}
         <div ref={chatEndRef} />
       </div>
 
-      <div className="ai-actions">
-        <button className="ghost small" onClick={analyzeSelection} disabled={busy}>
-          分析选中内容
-        </button>
-        <span className="muted">
-          {pane ? `当前面板：${pane.profileName}` : "未打开终端"}
-        </span>
-      </div>
+      {inserted && (
+        <div className="ai-inserted">
+          <Icon name="check" size={12} />
+          已插入到输入行（未执行）
+        </div>
+      )}
 
-      <div className="ai-input">
+      <div className="ai-compose">
         <textarea
-          rows={3}
+          rows={2}
           value={input}
           placeholder="向 AI 提问…（Ctrl+Enter 发送）"
           onChange={(event) => setInput(event.target.value)}
@@ -253,43 +306,54 @@ export function AiSidebar() {
             }
           }}
         />
-        <button
-          className="primary small"
-          disabled={busy || !input.trim()}
-          onClick={() => {
-            void send(input, "chat");
-            setInput("");
-          }}
-        >
-          发送
-        </button>
+        <div className="compose-foot">
+          <span className="muted">Ctrl+Enter 发送</span>
+          <button
+            className="btn-primary sm"
+            disabled={busy || !input.trim()}
+            onClick={() => {
+              void send(input, "chat");
+              setInput("");
+            }}
+          >
+            发送
+          </button>
+        </div>
       </div>
 
       <div className="ai-nl2cmd">
         <div className="section-title">自然语言转命令</div>
-        <div className="row">
+        <div className="nl-input-row">
           <input
             value={nlPrompt}
             placeholder="例如：查找占用内存最高的前 5 个进程"
             onChange={(event) => setNlPrompt(event.target.value)}
             onKeyDown={(event) => event.key === "Enter" && generateCommand()}
           />
-          <button className="ghost small" onClick={generateCommand} disabled={busy || !nlPrompt.trim()}>
+          <button className="btn-ghost sm" onClick={generateCommand} disabled={busy || !nlPrompt.trim()}>
             生成
           </button>
         </div>
         {nlResult && (
-          <div className={`nl-result risk-${nlResult.risk}`}>
-            <pre className="nl-command">{nlResult.command}</pre>
-            <div className="nl-meta">
+          <div className={`cmd-card risk-${nlResult.risk}`}>
+            <div className="cmd-head">
+              <span className="cmd-title">命令建议</span>
               <span className={`risk-badge risk-${nlResult.risk}`}>
                 {RISK_LABEL[nlResult.risk] ?? nlResult.risk}
               </span>
-              <span className="muted">shell: {nlResult.shell}</span>
-              {nlResult.requires_sudo && <span className="tag">需要 sudo</span>}
-              {nlResult.blocked && <span className="tag danger">本地规则已拦截</span>}
+              {nlResult.requires_sudo && <span className="tag">sudo</span>}
+              {nlResult.blocked && <span className="tag danger">已拦截</span>}
+              <div className="spacer" />
+              <button
+                className="icon-btn sm"
+                title="复制命令"
+                onClick={() => void navigator.clipboard?.writeText(nlResult.command)}
+              >
+                <Icon name="copy" size={12} />
+              </button>
             </div>
-            {nlResult.explanation && <div className="nl-explain">{nlResult.explanation}</div>}
+            <pre className="cmd-code">{nlResult.command}</pre>
+            {nlResult.explanation && <div className="cmd-note">{nlResult.explanation}</div>}
             {nlResult.assumptions.length > 0 && (
               <ul className="nl-assumptions">
                 {nlResult.assumptions.map((item) => (
@@ -297,8 +361,8 @@ export function AiSidebar() {
                 ))}
               </ul>
             )}
-            <div className="row">
-              <label className="inline">
+            <div className="cmd-foot">
+              <label className="check">
                 <input
                   type="checkbox"
                   checked={autoRun}
@@ -308,12 +372,15 @@ export function AiSidebar() {
                 插入后按回车执行
               </label>
               <div className="spacer" />
-              <button className="ghost small" onClick={() => setNlResult(null)}>
+              <button className="btn-ghost sm" onClick={() => setNlResult(null)}>
                 放弃
               </button>
-              <button className="primary small" onClick={insertCommand}>
+              <button className="btn-primary sm" onClick={insertCommand}>
                 确认并插入
               </button>
+            </div>
+            <div className="cmd-hint">
+              shell: {nlResult.shell} · 只写入终端输入行，需你确认后才会执行
             </div>
           </div>
         )}

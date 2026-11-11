@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { errorText, profileDelete } from "../api";
 import { useAppStore } from "../store";
 import type { Profile } from "../types";
+import { Icon } from "./Icon";
 
 interface Props {
   onNew: () => void;
@@ -10,28 +11,73 @@ interface Props {
   onExport: () => void;
   onRdp: (profile: Profile) => void;
   onNotice: (message: string, kind?: "info" | "error") => void;
+  focusSignal: number;
 }
 
-export function SessionSidebar({ onNew, onEdit, onImport, onExport, onRdp, onNotice }: Props) {
+type ProtoFilter = "ssh" | "rdp";
+
+const PROTO_LABEL: Record<ProtoFilter, string> = { ssh: "SSH", rdp: "RDP" };
+
+export function SessionSidebar({
+  onNew,
+  onEdit,
+  onImport,
+  onExport,
+  onRdp,
+  onNotice,
+  focusSignal,
+}: Props) {
   const profiles = useAppStore((s) => s.profiles);
   const loading = useAppStore((s) => s.profilesLoading);
   const error = useAppStore((s) => s.profilesError);
+  const tabs = useAppStore((s) => s.tabs);
   const openProfileTab = useAppStore((s) => s.openProfileTab);
   const setSftpProfileId = useAppStore((s) => s.setSftpProfileId);
   const loadProfiles = useAppStore((s) => s.loadProfiles);
+
   const [filter, setFilter] = useState("");
+  const [proto, setProto] = useState<ProtoFilter>("ssh");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (focusSignal > 0) searchRef.current?.focus();
+  }, [focusSignal]);
+
+  const keyword = filter.trim().toLowerCase();
+  const matches = useMemo(
+    () =>
+      profiles.filter((profile) => {
+        if (!keyword) return true;
+        return (
+          profile.name.toLowerCase().includes(keyword) ||
+          profile.target.host.toLowerCase().includes(keyword) ||
+          (profile.group ?? "").toLowerCase().includes(keyword) ||
+          profile.protocol.includes(keyword) ||
+          (profile.protocol === "rdp" ? "rdp 远程桌面" : "ssh").includes(keyword) ||
+          profile.tags.some((tag) => tag.toLowerCase().includes(keyword))
+        );
+      }),
+    [profiles, keyword],
+  );
+
+  const globalCount = useMemo(
+    () => ({
+      ssh: profiles.filter((profile) => profile.protocol === "ssh").length,
+      rdp: profiles.filter((profile) => profile.protocol === "rdp").length,
+    }),
+    [profiles],
+  );
+  const matchCount = useMemo(
+    () => ({
+      ssh: matches.filter((profile) => profile.protocol === "ssh").length,
+      rdp: matches.filter((profile) => profile.protocol === "rdp").length,
+    }),
+    [matches],
+  );
 
   const groups = useMemo(() => {
-    const keyword = filter.trim().toLowerCase();
-    const visible = profiles.filter((profile) => {
-      if (!keyword) return true;
-      return (
-        profile.name.toLowerCase().includes(keyword) ||
-        profile.target.host.toLowerCase().includes(keyword) ||
-        profile.tags.some((tag) => tag.toLowerCase().includes(keyword))
-      );
-    });
+    const visible = matches.filter((profile) => profile.protocol === proto);
     const map = new Map<string, Profile[]>();
     for (const profile of visible) {
       const key = profile.group?.trim() || "未分组";
@@ -40,7 +86,12 @@ export function SessionSidebar({ onNew, onEdit, onImport, onExport, onRdp, onNot
       map.set(key, list);
     }
     return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [profiles, filter]);
+  }, [matches, proto]);
+
+  const activeProfileIds = useMemo(
+    () => new Set(tabs.flatMap((tab) => tab.panes.map((pane) => pane.profileId))),
+    [tabs],
+  );
 
   const handleConnect = (profile: Profile) => {
     if (profile.protocol === "rdp") {
@@ -61,96 +112,109 @@ export function SessionSidebar({ onNew, onEdit, onImport, onExport, onRdp, onNot
     }
   };
 
+  const visibleCount = groups.reduce((sum, [, list]) => sum + list.length, 0);
+  const emptyVariant: "none" | "search" | "protocol" | null =
+    profiles.length === 0
+      ? "none"
+      : visibleCount > 0 || loading || error
+        ? null
+        : keyword
+          ? "search"
+          : "protocol";
+
   return (
     <aside className="sidebar">
-      <div className="sidebar-head">
-        <span className="brand">FanSSH</span>
-        <span className="badge">v1</span>
-      </div>
-      <div className="sidebar-tools">
-        <input
-          className="search"
-          placeholder="搜索名称 / 主机 / 标签"
-          value={filter}
-          onChange={(event) => setFilter(event.target.value)}
-        />
-        <div className="tool-row">
-          <button className="primary small" onClick={onNew}>
-            + 新建连接
-          </button>
-          <button className="ghost small" onClick={onImport} title="从 JSON 导入">
-            导入
-          </button>
-          <button className="ghost small" onClick={onExport} title="导出为 JSON">
-            导出
-          </button>
-        </div>
+      <div className="sb-head">
+        <span className="sb-title">会话</span>
+        <span className="sb-count">{profiles.length}</span>
+        <div className="spacer" />
+        <button className="icon-btn sm" title="新建连接" onClick={onNew}>
+          <Icon name="plus" size={14} />
+        </button>
       </div>
 
-      <div className="sidebar-list">
-        {loading && <div className="hint">加载中…</div>}
-        {error && <div className="hint error">{error}</div>}
-        {!loading && !error && profiles.length === 0 && (
-          <div className="hint">
-            还没有服务器配置。
-            <br />
-            点「新建连接」添加第一台服务器。
-          </div>
+      <div className="sb-search">
+        <Icon name="search" size={13} />
+        <input
+          ref={searchRef}
+          value={filter}
+          placeholder="搜索名称 / 主机 / 标签"
+          onChange={(event) => setFilter(event.target.value)}
+        />
+        {filter ? (
+          <button className="sb-clear" title="清空" onClick={() => setFilter("")}>
+            <Icon name="x" size={11} />
+          </button>
+        ) : (
+          <kbd>/</kbd>
         )}
+      </div>
+
+      <div className="sb-actions">
+        <button className="btn-primary" onClick={onNew}>
+          <Icon name="plus" size={13} />
+          新建连接
+        </button>
+        <button className="btn-ghost" title="从 JSON 导入" onClick={onImport}>
+          <Icon name="import" size={13} />
+          导入
+        </button>
+        <button className="icon-btn sm" title="导出为 JSON" onClick={onExport}>
+          <Icon name="export" size={14} />
+        </button>
+      </div>
+
+      <div className="sb-list">
+        {loading && <div className="sb-hint">加载中…</div>}
+        {error && <div className="sb-hint err">{error}</div>}
         {groups.map(([group, list]) => {
           const isCollapsed = collapsed[group] ?? false;
           return (
             <div className="group" key={group}>
               <button
-                className="group-head"
+                className={`group-head${isCollapsed ? " is-collapsed" : ""}`}
                 onClick={() => setCollapsed((prev) => ({ ...prev, [group]: !isCollapsed }))}
               >
-                <span className={`caret${isCollapsed ? " collapsed" : ""}`}>▾</span>
-                <span>{group}</span>
-                <span className="group-count">{list.length}</span>
+                <Icon name="chev" size={11} className="g-caret" />
+                <span className="g-name">{group}</span>
+                <span className="g-count">{list.length}</span>
               </button>
               {!isCollapsed &&
                 list.map((profile) => (
                   <div
                     key={profile.id}
-                    className="session-item"
+                    className={`session${activeProfileIds.has(profile.id) ? " is-open" : ""}`}
                     onDoubleClick={() => handleConnect(profile)}
-                    title={`双击连接 ${profile.target.user}@${profile.target.host}`}
+                    title={`双击连接 ${profile.target.user ? `${profile.target.user}@` : ""}${profile.target.host}:${profile.target.port}`}
                   >
-                    <span className={`proto proto-${profile.protocol}`}>
-                      {profile.protocol === "rdp" ? "RDP" : "SSH"}
+                    <span className={`proto-tag ${profile.protocol}`}>
+                      {PROTO_LABEL[profile.protocol]}
                     </span>
-                    <div className="session-main">
-                      <div className="session-name">{profile.name}</div>
-                      <div className="session-sub">
-                        {profile.target.user ? `${profile.target.user}@` : ""}
-                        {profile.target.host}:{profile.target.port}
-                        {profile.jump.length > 0 && <span className="tag">跳板</span>}
-                        {profile.tags.map((tag) => (
-                          <span className="tag" key={tag}>
-                            {tag}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="session-actions">
-                      <button className="icon" title="连接" onClick={() => handleConnect(profile)}>
-                        ▶
+                    <span className="s-name">{profile.name}</span>
+                    <span className="s-host">{profile.target.host}</span>
+                    <span className={`s-dot ${activeProfileIds.has(profile.id) ? "on" : ""}`} />
+                    <div className="s-actions">
+                      <button className="mini" title="连接" onClick={() => handleConnect(profile)}>
+                        <Icon name="play" size={12} />
                       </button>
                       {profile.protocol === "ssh" && (
                         <button
-                          className="icon"
+                          className="mini"
                           title="SFTP 文件"
                           onClick={() => setSftpProfileId(profile.id)}
                         >
-                          ⇅
+                          <Icon name="transfer" size={12} />
                         </button>
                       )}
-                      <button className="icon" title="编辑" onClick={() => onEdit(profile)}>
-                        ✎
+                      <button className="mini" title="编辑" onClick={() => onEdit(profile)}>
+                        <Icon name="edit" size={12} />
                       </button>
-                      <button className="icon danger" title="删除" onClick={() => handleDelete(profile)}>
-                        🗑
+                      <button
+                        className="mini danger"
+                        title="删除"
+                        onClick={() => handleDelete(profile)}
+                      >
+                        <Icon name="trash" size={12} />
                       </button>
                     </div>
                   </div>
@@ -158,10 +222,72 @@ export function SessionSidebar({ onNew, onEdit, onImport, onExport, onRdp, onNot
             </div>
           );
         })}
+
+        {emptyVariant === "none" && (
+          <div className="sb-empty">
+            <span className="empty-icon">
+              <Icon name="folder" size={18} />
+            </span>
+            <div className="empty-title">还没有服务器配置</div>
+            <div className="empty-desc">添加第一台 SSH / RDP 服务器后即可双击连接</div>
+            <button className="btn-primary sm" onClick={onNew}>
+              新建连接
+            </button>
+          </div>
+        )}
+        {emptyVariant === "search" && (
+          <div className="sb-empty">
+            <span className="empty-icon">
+              <Icon name="search" size={18} />
+            </span>
+            <div className="empty-title">没有匹配的会话</div>
+            <div className="empty-desc">试试更短的关键词，或切换协议</div>
+            <button className="btn-ghost sm" onClick={() => setFilter("")}>
+              清除搜索
+            </button>
+          </div>
+        )}
+        {emptyVariant === "protocol" && (
+          <div className="sb-empty">
+            <span className="empty-icon">
+              <Icon name="plus" size={18} />
+            </span>
+            <div className="empty-title">该协议下没有配置</div>
+            <div className="empty-desc">
+              当前没有 {PROTO_LABEL[proto]} 会话
+            </div>
+            <button className="btn-ghost sm" onClick={onNew}>
+              新建 {PROTO_LABEL[proto]} 连接
+            </button>
+          </div>
+        )}
       </div>
-      <div className="sidebar-foot">
-        <span>{profiles.length} 个配置</span>
-        <span>配置与凭据分开存储</span>
+
+      <div className="sb-filter" role="tablist" aria-label="协议筛选">
+        <div className="proto-switch">
+          {(["ssh", "rdp"] as ProtoFilter[]).map((item) => {
+            const disabled = globalCount[item] === 0;
+            return (
+              <button
+                key={item}
+                role="tab"
+                aria-selected={proto === item}
+                className={`proto-tab${proto === item ? " is-active" : ""}`}
+                disabled={disabled}
+                title={disabled ? `暂无 ${PROTO_LABEL[item]} 配置` : `只看 ${PROTO_LABEL[item]}`}
+                onClick={() => setProto(item)}
+              >
+                {PROTO_LABEL[item]}
+                <span className="pcount">{matchCount[item]}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="sb-foot">
+        <Icon name="lock" size={11} />
+        <span>凭据已加密，与配置分开存储</span>
       </div>
     </aside>
   );

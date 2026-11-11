@@ -10,6 +10,7 @@ import {
   sftpUpload,
 } from "../api";
 import type { RemoteEntry, TransferEvent } from "../types";
+import { Icon } from "./Icon";
 
 interface Props {
   profileId: string;
@@ -43,6 +44,13 @@ function formatSize(size: number): string {
 function formatMode(mode: number | null): string {
   if (mode == null) return "-";
   return (mode & 0o7777).toString(8).padStart(4, "0");
+}
+
+function formatTime(mtime: number | null): string {
+  if (!mtime) return "-";
+  const date = new Date(mtime * 1000);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function parentOf(path: string): string {
@@ -189,106 +197,146 @@ export function SftpPanel({ profileId, profileName, onClose }: Props) {
 
   return (
     <div className="drawer-mask" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div className="drawer">
+      <div className="drawer sftp-drawer">
         <div className="drawer-head">
-          <div>
-            <h2>SFTP · {profileName}</h2>
-            <div className="path-bar">
-              <button className="ghost small" onClick={() => sftpId && loadDir(sftpId, parentOf(cwd))}>
-                ↑ 上级
-              </button>
-              <input
-                value={cwd}
-                onChange={(event) => setCwd(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && sftpId) loadDir(sftpId, cwd);
-                }}
-              />
-              <button className="ghost small" onClick={() => sftpId && loadDir(sftpId, cwd)}>
-                刷新
-              </button>
+          <div className="dh-main">
+            <div className="dh-title">
+              <Icon name="transfer" size={14} />
+              SFTP · {profileName}
+            </div>
+            <div className="dh-sub">
+              {sftpId ? "已连接" : "连接中…"}
+              {selected ? ` · 已选 ${selected.name}` : ""}
             </div>
           </div>
-          <button className="icon" onClick={onClose}>
-            ×
+          <button className="icon-btn sm" title="关闭" onClick={onClose}>
+            <Icon name="x" size={14} />
           </button>
         </div>
 
-        {error && <div className="banner error">{error}</div>}
+        <div className="path-row">
+          <button
+            className="btn-ghost sm icon-only"
+            title="上级目录"
+            onClick={() => sftpId && loadDir(sftpId, parentOf(cwd))}
+          >
+            <Icon name="up" size={12} />
+          </button>
+          <input
+            className="path-input"
+            value={cwd}
+            onChange={(event) => setCwd(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && sftpId) loadDir(sftpId, cwd);
+            }}
+          />
+          <button
+            className="btn-ghost sm icon-only"
+            title="刷新"
+            onClick={() => sftpId && loadDir(sftpId, cwd)}
+          >
+            <Icon name="refresh" size={12} />
+          </button>
+        </div>
 
-        <div className="sftp-toolbar">
-          <button className="primary small" onClick={handleUpload} disabled={!sftpId}>
+        {error && (
+          <div className="banner err" onClick={() => setError(null)}>
+            {error}
+          </div>
+        )}
+
+        <div className="sftp-tools">
+          <button className="btn-primary sm" onClick={handleUpload} disabled={!sftpId}>
+            <Icon name="up" size={12} />
             上传文件
           </button>
           <button
-            className="ghost small"
+            className="btn-ghost sm"
             disabled={!selected || selected.is_dir}
             onClick={() => selected && handleDownload(selected)}
           >
+            <Icon name="down" size={12} />
             下载选中
           </button>
           <div className="spacer" />
           {selected && (
             <div className="chmod-box">
-              <span>chmod</span>
+              <span>权限</span>
               <input value={modeInput} onChange={(event) => setModeInput(event.target.value)} />
-              <button className="ghost small" onClick={handleChmod}>
+              <button className="btn-ghost sm" onClick={handleChmod}>
                 应用
               </button>
             </div>
           )}
         </div>
 
-        <div className="sftp-list">
+        <div className="sftp-table">
           <div className="sftp-row sftp-head">
-            <span>名称</span>
-            <span>大小</span>
-            <span>权限</span>
+            <span className="col-name">名称</span>
+            <span className="col-size">大小</span>
+            <span className="col-mode">权限</span>
+            <span className="col-time">修改时间</span>
           </div>
-          {loading && <div className="hint">读取目录…</div>}
-          {!loading &&
-            entries.map((entry) => (
-              <div
-                key={entry.path}
-                className={`sftp-row${selected?.path === entry.path ? " is-selected" : ""}`}
-                onClick={() => {
-                  setSelected(entry);
-                  if (entry.mode != null) setModeInput((entry.mode & 0o777).toString(8).padStart(3, "0"));
-                }}
-                onDoubleClick={() => entry.is_dir && sftpId && loadDir(sftpId, entry.path)}
-              >
-                <span className="sftp-name">
-                  <span className="file-icon">{entry.is_dir ? "📁" : "📄"}</span>
-                  {entry.name}
-                  {entry.is_symlink && <span className="tag">link</span>}
-                </span>
-                <span>{entry.is_dir ? "-" : formatSize(entry.size)}</span>
-                <span>{formatMode(entry.mode)}</span>
-              </div>
-            ))}
-          {!loading && entries.length === 0 && <div className="hint">目录为空</div>}
+          <div className="sftp-body">
+            {loading && <div className="sftp-hint">读取目录…</div>}
+            {!loading &&
+              entries.map((entry) => (
+                <div
+                  key={entry.path}
+                  className={`sftp-row${selected?.path === entry.path ? " is-selected" : ""}${entry.is_dir ? " is-dir" : ""}`}
+                  onClick={() => {
+                    setSelected(entry);
+                    if (entry.mode != null) setModeInput((entry.mode & 0o777).toString(8).padStart(3, "0"));
+                  }}
+                  onDoubleClick={() => entry.is_dir && sftpId && loadDir(sftpId, entry.path)}
+                >
+                  <span className="sftp-name col-name">
+                    <Icon name={entry.is_dir ? "folder" : "file"} size={13} />
+                    <span className="fname">{entry.name}</span>
+                    {entry.is_symlink && <span className="tag">link</span>}
+                  </span>
+                  <span className="col-size mono">{entry.is_dir ? "-" : formatSize(entry.size)}</span>
+                  <span className="col-mode mono">{formatMode(entry.mode)}</span>
+                  <span className="col-time mono">{formatTime(entry.mtime)}</span>
+                </div>
+              ))}
+            {!loading && entries.length === 0 && <div className="sftp-hint">目录为空</div>}
+          </div>
         </div>
 
-        <div className="transfer-queue">
-          <div className="section-title">传输队列</div>
-          {transfers.length === 0 && <div className="hint">暂无传输任务</div>}
+        <div className="drawer-queue">
+          <div className="dq-head">
+            <Icon name="transfer" size={12} />
+            <span>传输队列</span>
+            <span className="dq-count">{transfers.filter((row) => row.status === "running").length}</span>
+          </div>
+          {transfers.length === 0 && <div className="sftp-hint">暂无传输任务</div>}
           {transfers.map((row) => {
             const percent = row.total > 0 ? Math.round((row.done / row.total) * 100) : 0;
             return (
-              <div className="transfer-row" key={`${row.id}-${row.direction}`}>
-                <span className="transfer-name">
-                  {row.direction === "upload" ? "↑" : "↓"} {row.name}
+              <div className="queue-row" key={`${row.id}-${row.direction}`}>
+                <span className={`q-dir ${row.status}`}>
+                  <Icon name={row.direction === "upload" ? "up" : "down"} size={11} />
                 </span>
-                <div className="progress">
-                  <div className="progress-inner" style={{ width: `${percent}%` }} />
+                <div className="q-body">
+                  <div className="q-top">
+                    <span className="q-name">{row.name}</span>
+                    <span className="q-pct mono">{row.status === "done" ? "完成" : `${percent}%`}</span>
+                  </div>
+                  <div className="q-bar">
+                    <div
+                      className={`q-fill ${row.status}`}
+                      style={{ width: `${row.status === "done" ? 100 : percent}%` }}
+                    />
+                  </div>
+                  <div className="q-meta">
+                    {row.status === "error"
+                      ? row.message
+                      : row.status === "done"
+                        ? formatSize(row.total)
+                        : `${formatSize(row.done)} / ${formatSize(row.total)} · ${formatSize(row.speed)}/s`}
+                  </div>
                 </div>
-                <span className="transfer-meta">
-                  {row.status === "error"
-                    ? row.message
-                    : row.status === "done"
-                      ? "完成"
-                      : `${percent}% · ${formatSize(row.speed)}/s`}
-                </span>
               </div>
             );
           })}
