@@ -156,10 +156,10 @@ fn build_port(port: &str, prefs: &SerialPrefs) -> serialport::Result<Box<dyn ser
 fn open_error(port: &str, err: serialport::Error) -> AppError {
     let (code, reason) = match err.kind() {
         serialport::ErrorKind::NoDevice => ("serial.not_found", "串口不存在或已被拔出"),
-        serialport::ErrorKind::Io(kind) if *kind == std::io::ErrorKind::PermissionDenied => {
+        serialport::ErrorKind::Io(kind) if kind == std::io::ErrorKind::PermissionDenied => {
             ("serial.busy", "串口被其他程序占用，或当前用户没有访问权限")
         }
-        serialport::ErrorKind::Io(kind) if *kind == std::io::ErrorKind::NotFound => {
+        serialport::ErrorKind::Io(kind) if kind == std::io::ErrorKind::NotFound => {
             ("serial.not_found", "串口不存在或已被拔出")
         }
         _ => ("serial.open_failed", "打开串口失败（端口可能被占用或权限不足）"),
@@ -167,11 +167,8 @@ fn open_error(port: &str, err: serialport::Error) -> AppError {
     AppError::new(code, format!("{reason}（{port}）：{err}"))
 }
 
-fn is_read_timeout(err: &serialport::Error) -> bool {
-    matches!(
-        err.kind(),
-        serialport::ErrorKind::Io(std::io::ErrorKind::TimedOut)
-    )
+fn is_read_timeout(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::TimedOut
 }
 
 fn port_sort_key(name: &str) -> (u8, u32, String) {

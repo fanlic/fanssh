@@ -324,7 +324,7 @@ impl ProfileStore {
         let mut incoming: Vec<Profile> = Vec::new();
         for item in raw.as_array().cloned().unwrap_or_default() {
             let (mut profile_value, legacy) = extract_legacy_secrets(item, vault)?;
-            if let Some((auth, _)) = legacy {
+            if let Some(auth) = legacy {
                 // 旧版明文凭据已转入 vault，替换掉原有引用
                 if let Some(object) = profile_value.as_object_mut() {
                     object.insert(
