@@ -193,14 +193,14 @@ fn flush(buffer: &mut String, seq: &mut u64, on_event: &TauriChannel<TermEvent>)
     });
 }
 
-/// 增量 UTF-8 解码：避免多字节字符被 SSH 分片切断时出现乱码。
+/// 增量 UTF-8 解码：避免多字节字符被 SSH / 串口分片切断时出现乱码。
 #[derive(Default)]
-struct Utf8Decoder {
+pub(crate) struct Utf8Decoder {
     pending: Vec<u8>,
 }
 
 impl Utf8Decoder {
-    fn push(&mut self, chunk: &[u8]) -> Option<String> {
+    pub(crate) fn push(&mut self, chunk: &[u8]) -> Option<String> {
         if chunk.is_empty() {
             return None;
         }

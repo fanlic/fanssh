@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { errorText, profileDelete } from "../api";
 import { useAppStore } from "../store";
 import type { Profile } from "../types";
@@ -11,12 +11,14 @@ interface Props {
   onExport: () => void;
   onRdp: (profile: Profile) => void;
   onNotice: (message: string, kind?: "info" | "error") => void;
-  focusSignal: number;
+  query: string;
+  onQueryChange: (value: string) => void;
 }
 
-type ProtoFilter = "ssh" | "rdp";
+type ProtoFilter = "ssh" | "rdp" | "serial";
 
-const PROTO_LABEL: Record<ProtoFilter, string> = { ssh: "SSH", rdp: "RDP" };
+const PROTO_LABEL: Record<ProtoFilter, string> = { ssh: "SSH", rdp: "RDP", serial: "串口" };
+const PROTO_TAG: Record<ProtoFilter, string> = { ssh: "SSH", rdp: "RDP", serial: "SER" };
 
 export function SessionSidebar({
   onNew,
@@ -25,7 +27,8 @@ export function SessionSidebar({
   onExport,
   onRdp,
   onNotice,
-  focusSignal,
+  query,
+  onQueryChange,
 }: Props) {
   const profiles = useAppStore((s) => s.profiles);
   const loading = useAppStore((s) => s.profilesLoading);
@@ -35,16 +38,10 @@ export function SessionSidebar({
   const setSftpProfileId = useAppStore((s) => s.setSftpProfileId);
   const loadProfiles = useAppStore((s) => s.loadProfiles);
 
-  const [filter, setFilter] = useState("");
   const [proto, setProto] = useState<ProtoFilter>("ssh");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  const searchRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    if (focusSignal > 0) searchRef.current?.focus();
-  }, [focusSignal]);
-
-  const keyword = filter.trim().toLowerCase();
+  const keyword = query.trim().toLowerCase();
   const matches = useMemo(
     () =>
       profiles.filter((profile) => {
@@ -54,24 +51,28 @@ export function SessionSidebar({
           profile.target.host.toLowerCase().includes(keyword) ||
           (profile.group ?? "").toLowerCase().includes(keyword) ||
           profile.protocol.includes(keyword) ||
-          (profile.protocol === "rdp" ? "rdp 远程桌面" : "ssh").includes(keyword) ||
+          (profile.protocol === "rdp"
+            ? "rdp 远程桌面"
+            : profile.protocol === "serial"
+              ? "串口 serial"
+              : "ssh"
+          ).includes(keyword) ||
+          (profile.protocol === "serial"
+            ? `${profile.options.serial?.port ?? ""} ${profile.options.serial?.baud_rate ?? ""}`
+                .toLowerCase()
+                .includes(keyword)
+            : false) ||
           profile.tags.some((tag) => tag.toLowerCase().includes(keyword))
         );
       }),
     [profiles, keyword],
   );
 
-  const globalCount = useMemo(
-    () => ({
-      ssh: profiles.filter((profile) => profile.protocol === "ssh").length,
-      rdp: profiles.filter((profile) => profile.protocol === "rdp").length,
-    }),
-    [profiles],
-  );
   const matchCount = useMemo(
     () => ({
       ssh: matches.filter((profile) => profile.protocol === "ssh").length,
       rdp: matches.filter((profile) => profile.protocol === "rdp").length,
+      serial: matches.filter((profile) => profile.protocol === "serial").length,
     }),
     [matches],
   );
@@ -133,33 +134,16 @@ export function SessionSidebar({
         </button>
       </div>
 
-      <div className="sb-search">
-        <Icon name="search" size={13} />
-        <input
-          ref={searchRef}
-          value={filter}
-          placeholder="搜索名称 / 主机 / 标签"
-          onChange={(event) => setFilter(event.target.value)}
-        />
-        {filter ? (
-          <button className="sb-clear" title="清空" onClick={() => setFilter("")}>
-            <Icon name="x" size={11} />
-          </button>
-        ) : (
-          <kbd>/</kbd>
-        )}
-      </div>
-
       <div className="sb-actions">
         <button className="btn-primary" onClick={onNew}>
           <Icon name="plus" size={13} />
           新建连接
         </button>
-        <button className="btn-ghost" title="从 JSON 导入" onClick={onImport}>
+        <button className="btn-ghost" title="从加密配置导入（.fansshx / 旧版 .json）" onClick={onImport}>
           <Icon name="import" size={13} />
           导入
         </button>
-        <button className="icon-btn sm" title="导出为 JSON" onClick={onExport}>
+        <button className="icon-btn sm" title="导出加密配置（.fansshx）" onClick={onExport}>
           <Icon name="export" size={14} />
         </button>
       </div>
@@ -185,10 +169,14 @@ export function SessionSidebar({
                     key={profile.id}
                     className={`session${activeProfileIds.has(profile.id) ? " is-open" : ""}`}
                     onDoubleClick={() => handleConnect(profile)}
-                    title={`双击连接 ${profile.target.user ? `${profile.target.user}@` : ""}${profile.target.host}:${profile.target.port}`}
+                    title={`双击连接 ${
+                      profile.protocol === "serial"
+                        ? `${profile.target.host} @ ${profile.options.serial?.baud_rate ?? ""}`
+                        : `${profile.target.user ? `${profile.target.user}@` : ""}${profile.target.host}:${profile.target.port}`
+                    }`}
                   >
                     <span className={`proto-tag ${profile.protocol}`}>
-                      {PROTO_LABEL[profile.protocol]}
+                      {PROTO_TAG[profile.protocol]}
                     </span>
                     <span className="s-name">{profile.name}</span>
                     <span className="s-host">{profile.target.host}</span>
@@ -229,7 +217,7 @@ export function SessionSidebar({
               <Icon name="folder" size={18} />
             </span>
             <div className="empty-title">还没有服务器配置</div>
-            <div className="empty-desc">添加第一台 SSH / RDP 服务器后即可双击连接</div>
+            <div className="empty-desc">添加第一台 SSH / 串口 / RDP 设备后即可双击连接</div>
             <button className="btn-primary sm" onClick={onNew}>
               新建连接
             </button>
@@ -242,7 +230,7 @@ export function SessionSidebar({
             </span>
             <div className="empty-title">没有匹配的会话</div>
             <div className="empty-desc">试试更短的关键词，或切换协议</div>
-            <button className="btn-ghost sm" onClick={() => setFilter("")}>
+            <button className="btn-ghost sm" onClick={() => onQueryChange("")}>
               清除搜索
             </button>
           </div>
@@ -265,23 +253,18 @@ export function SessionSidebar({
 
       <div className="sb-filter" role="tablist" aria-label="协议筛选">
         <div className="proto-switch">
-          {(["ssh", "rdp"] as ProtoFilter[]).map((item) => {
-            const disabled = globalCount[item] === 0;
-            return (
-              <button
-                key={item}
-                role="tab"
-                aria-selected={proto === item}
-                className={`proto-tab${proto === item ? " is-active" : ""}`}
-                disabled={disabled}
-                title={disabled ? `暂无 ${PROTO_LABEL[item]} 配置` : `只看 ${PROTO_LABEL[item]}`}
-                onClick={() => setProto(item)}
-              >
-                {PROTO_LABEL[item]}
-                <span className="pcount">{matchCount[item]}</span>
-              </button>
-            );
-          })}
+          {(["ssh", "serial", "rdp"] as ProtoFilter[]).map((item) => (
+            <button
+              key={item}
+              role="tab"
+              aria-selected={proto === item}
+              className={`proto-tab${proto === item ? " is-active" : ""}`}
+              onClick={() => setProto(item)}
+            >
+              {PROTO_LABEL[item]}
+              <span className="pcount">{matchCount[item]}</span>
+            </button>
+          ))}
         </div>
       </div>
 

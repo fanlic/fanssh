@@ -11,7 +11,7 @@ const RISK_LABEL: Record<string, string> = {
   high: "高风险",
 };
 
-export function AiSidebar() {
+export function AiSidebar({ collapsed = false }: { collapsed?: boolean }) {
   const pane = useAppStore(activePaneSelector);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -48,8 +48,9 @@ export function AiSidebar() {
   }, []);
 
   useEffect(() => {
+    if (collapsed) return;
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, busy]);
+  }, [messages, busy, collapsed]);
 
   useEffect(() => {
     if (!inserted) return;
@@ -151,7 +152,10 @@ export function AiSidebar() {
   };
 
   return (
-    <aside className="ai-panel">
+    <aside
+      className={`ai-panel${collapsed ? " is-collapsed" : ""}`}
+      aria-hidden={collapsed}
+    >
       <div className="ai-head">
         <span className="ai-title">
           <Icon name="spark" size={14} />

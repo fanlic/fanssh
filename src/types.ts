@@ -1,6 +1,6 @@
 // 与 Rust 侧 serde 模型保持一致的类型定义。
 
-export type Protocol = "ssh" | "rdp";
+export type Protocol = "ssh" | "rdp" | "serial";
 export type SecretKind = "password" | "private_key" | "passphrase" | "token";
 
 export interface Target {
@@ -31,8 +31,36 @@ export interface RdpPrefs {
   domain?: string | null;
 }
 
+export type SerialParity = "none" | "odd" | "even";
+export type SerialFlowControl = "none" | "hardware" | "software";
+export type SerialNewline = "raw" | "cr_to_crlf" | "lf_to_crlf";
+
+/** 串口参数。与凭据无关，随 profile 持久化。 */
+export interface SerialPrefs {
+  port: string;
+  baud_rate: number;
+  data_bits: number;
+  stop_bits: number;
+  parity: SerialParity;
+  flow_control: SerialFlowControl;
+  /** DTR 默认拉高：部分交换机 console 需要 DTR 有效才有输出 */
+  dtr: boolean;
+  /** RTS 默认拉高；硬件流控时由驱动接管 */
+  rts: boolean;
+  /** 本地回显默认关闭，避免设备已回显时重复显示 */
+  local_echo: boolean;
+  newline: SerialNewline;
+}
+
 export interface ProfileOptions {
   rdp?: RdpPrefs | null;
+  serial?: SerialPrefs | null;
+}
+
+/** 系统串口枚举结果；description 含厂商/产品/序列号，便于区分同型号设备。 */
+export interface SerialPortInfo {
+  port_name: string;
+  description: string;
 }
 
 export interface Profile {

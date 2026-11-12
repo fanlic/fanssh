@@ -6,6 +6,7 @@ use tauri::Manager;
 
 use crate::app::settings::SettingsStore;
 use crate::profile::ProfileStore;
+use crate::serial::SerialManager;
 use crate::session::manager::SshManager;
 use crate::transport::sftp::SftpManager;
 use crate::vault::Vault;
@@ -16,6 +17,7 @@ pub struct AppState {
     pub profiles: Arc<ProfileStore>,
     pub settings: Arc<SettingsStore>,
     pub ssh: SshManager,
+    pub serial: SerialManager,
     pub sftp: SftpManager,
     pub http: reqwest::Client,
 }
@@ -38,6 +40,7 @@ impl AppState {
             profiles,
             settings,
             ssh: SshManager::default(),
+            serial: SerialManager::default(),
             sftp: SftpManager::default(),
             http,
         })

@@ -3,6 +3,7 @@ mod app;
 mod crypto;
 mod ipc;
 mod profile;
+mod serial;
 mod session;
 mod transport;
 mod util;
@@ -30,6 +31,11 @@ pub fn run() {
             term_input,
             term_resize,
             term_close,
+            serial_list_ports,
+            serial_open,
+            serial_input,
+            serial_set_lines,
+            serial_close,
             profile_list,
             profile_upsert,
             profile_delete,

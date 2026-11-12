@@ -1,6 +1,16 @@
 import { useEffect, useState } from "react";
-import { errorText, profileUpsert, vaultPut } from "../api";
-import type { AuthRef, Profile, Protocol, RdpPrefs } from "../types";
+import { errorText, profileUpsert, serialListPorts, vaultPut } from "../api";
+import type {
+  AuthRef,
+  Profile,
+  Protocol,
+  RdpPrefs,
+  SerialFlowControl,
+  SerialNewline,
+  SerialParity,
+  SerialPortInfo,
+  SerialPrefs,
+} from "../types";
 import { Icon } from "./Icon";
 
 interface Props {
@@ -33,7 +43,62 @@ interface FormState {
   jumpPassword: string;
   jumpKeyText: string;
   rdp: RdpPrefs;
+  serial: SerialPrefs;
 }
+
+/** 串口参数预设：只回填波特率/数据位/停止位/校验/流控，不覆盖端口。 */
+const SERIAL_PRESETS: Array<{
+  id: string;
+  label: string;
+  params: Pick<
+    SerialPrefs,
+    "baud_rate" | "data_bits" | "stop_bits" | "parity" | "flow_control"
+  >;
+}> = [
+  {
+    id: "console",
+    label: "网络设备 console（9600 8N1，无流控）",
+    params: { baud_rate: 9600, data_bits: 8, stop_bits: 1, parity: "none", flow_control: "none" },
+  },
+  {
+    id: "debug",
+    label: "通用调试 / 开发板（115200 8N1，无流控）",
+    params: {
+      baud_rate: 115200,
+      data_bits: 8,
+      stop_bits: 1,
+      parity: "none",
+      flow_control: "none",
+    },
+  },
+  {
+    id: "industrial",
+    label: "工业设备（19200 8E1，无流控）",
+    params: { baud_rate: 19200, data_bits: 8, stop_bits: 1, parity: "even", flow_control: "none" },
+  },
+];
+
+function matchSerialPreset(serial: SerialPrefs): string {
+  const preset = SERIAL_PRESETS.find((item) =>
+    Object.entries(item.params).every(
+      ([key, value]) => serial[key as keyof typeof item.params] === value,
+    ),
+  );
+  return preset?.id ?? "custom";
+}
+
+const DEFAULT_SERIAL: SerialPrefs = {
+  port: "",
+  baud_rate: 115200,
+  data_bits: 8,
+  stop_bits: 1,
+  parity: "none",
+  flow_control: "none",
+  dtr: true,
+  rts: true,
+  local_echo: false,
+  newline: "raw",
+};
 
 const EMPTY: FormState = {
   name: "",
@@ -65,13 +130,16 @@ const EMPTY: FormState = {
     gateway: "",
     domain: "",
   },
+  serial: { ...DEFAULT_SERIAL },
 };
 
 function toForm(profile: Profile | null): FormState {
-  if (!profile) return { ...EMPTY, rdp: { ...EMPTY.rdp } };
+  if (!profile) return { ...EMPTY, rdp: { ...EMPTY.rdp }, serial: { ...DEFAULT_SERIAL } };
   const jump = profile.jump[0];
   const mode = (auth: AuthRef | undefined): AuthMode =>
     auth?.kind === "password" ? "password" : auth?.kind === "key" ? "key" : "none";
+  const serial = { ...DEFAULT_SERIAL, ...(profile.options.serial ?? {}) };
+  if (!serial.port && profile.protocol === "serial") serial.port = profile.target.host;
   return {
     name: profile.name,
     group: profile.group ?? "",
@@ -92,6 +160,7 @@ function toForm(profile: Profile | null): FormState {
     jumpPassword: "",
     jumpKeyText: "",
     rdp: { ...EMPTY.rdp, ...(profile.options.rdp ?? {}) },
+    serial,
   };
 }
 
@@ -137,15 +206,46 @@ async function buildRdpAuth(
 export function SessionDialog({ open, initial, onClose, onSaved, onError }: Props) {
   const [form, setForm] = useState<FormState>(() => toForm(initial));
   const [saving, setSaving] = useState(false);
+  const [ports, setPorts] = useState<SerialPortInfo[]>([]);
+  const [portsLoading, setPortsLoading] = useState(false);
+  const [portsError, setPortsError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) setForm(toForm(initial));
   }, [open, initial]);
 
+  const refreshPorts = async () => {
+    setPortsLoading(true);
+    setPortsError(null);
+    try {
+      setPorts(await serialListPorts());
+    } catch (error) {
+      setPorts([]);
+      setPortsError(errorText(error));
+    } finally {
+      setPortsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (open && form.protocol === "serial") void refreshPorts();
+    // 仅在弹窗打开或切到串口时枚举一次，避免每次输入都重扫
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, form.protocol]);
+
   if (!open) return null;
 
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }));
+
+  const updateSerial = (patch: Partial<SerialPrefs>) =>
+    setForm((prev) => ({ ...prev, serial: { ...prev.serial, ...patch } }));
+
+  const applyPreset = (id: string) => {
+    const preset = SERIAL_PRESETS.find((item) => item.id === id);
+    if (!preset) return; // 自定义：保留当前值
+    updateSerial({ ...preset.params });
+  };
 
   const buildAuth = async (
     mode: AuthMode,
@@ -186,64 +286,92 @@ export function SessionDialog({ open, initial, onClose, onSaved, onError }: Prop
     setSaving(true);
     try {
       if (!form.name.trim()) throw new Error("请填写名称");
-      if (!form.host.trim()) throw new Error("请填写主机地址");
-      const port = Number(form.port);
-      if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error("端口不合法");
-      if (form.protocol === "ssh" && !form.user.trim()) throw new Error("SSH 需要用户名");
 
-      const auth: AuthRef =
-        form.protocol === "rdp"
-          ? await buildRdpAuth(initial, form.name.trim(), form.password)
-          : await buildAuth(
-              form.authMode,
-              form.password,
-              form.keyText,
-              form.passphrase,
-              initial?.auth,
-              form.name.trim(),
-            );
+      const tags = form.tags
+        .split(/[,，]/)
+        .map((tag) => tag.trim())
+        .filter(Boolean);
 
-      const jump = [];
-      if (form.useJump && form.protocol === "ssh") {
-        if (!form.jumpHost.trim() || !form.jumpUser.trim()) {
-          throw new Error("跳板机的主机和用户名不能为空");
+      let profile: Profile;
+      if (form.protocol === "serial") {
+        // 串口配置与凭据无关，不触碰 vault。
+        const serial: SerialPrefs = {
+          ...form.serial,
+          port: form.serial.port.trim(),
+          baud_rate: Number(form.serial.baud_rate),
+        };
+        if (!serial.port) throw new Error("请选择或填写串口端口");
+        if (!Number.isFinite(serial.baud_rate) || serial.baud_rate <= 0) {
+          throw new Error("波特率必须大于 0");
         }
-        const jumpPort = Number(form.jumpPort) || 22;
-        const jumpAuth = await buildAuth(
-          form.jumpAuthMode,
-          form.jumpPassword,
-          form.jumpKeyText,
-          "",
-          initial?.jump[0]?.auth,
-          `${form.name.trim()} 跳板机`,
-        );
-        jump.push({
-          target: { host: form.jumpHost.trim(), port: jumpPort, user: form.jumpUser.trim() },
-          auth: jumpAuth,
-        });
-      }
+        profile = {
+          id: initial?.id ?? crypto.randomUUID(),
+          name: form.name.trim(),
+          group: form.group.trim() || null,
+          protocol: "serial",
+          target: { host: serial.port, port: 0, user: "" },
+          auth: { kind: "none" },
+          jump: [],
+          tags,
+          options: { serial },
+        };
+      } else {
+        if (!form.host.trim()) throw new Error("请填写主机地址");
+        const port = Number(form.port);
+        if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error("端口不合法");
+        if (form.protocol === "ssh" && !form.user.trim()) throw new Error("SSH 需要用户名");
 
-      const profile: Profile = {
-        id: initial?.id ?? crypto.randomUUID(),
-        name: form.name.trim(),
-        group: form.group.trim() || null,
-        protocol: form.protocol,
-        target: {
-          host: form.host.trim(),
-          port,
-          user: form.user.trim(),
-        },
-        auth,
-        jump,
-        tags: form.tags
-          .split(/[,，]/)
-          .map((tag) => tag.trim())
-          .filter(Boolean),
-        options:
+        const auth: AuthRef =
           form.protocol === "rdp"
-            ? { rdp: { ...form.rdp, domain: (form.rdp.domain ?? "").trim() || null } }
-            : {},
-      };
+            ? await buildRdpAuth(initial, form.name.trim(), form.password)
+            : await buildAuth(
+                form.authMode,
+                form.password,
+                form.keyText,
+                form.passphrase,
+                initial?.auth,
+                form.name.trim(),
+              );
+
+        const jump = [];
+        if (form.useJump && form.protocol === "ssh") {
+          if (!form.jumpHost.trim() || !form.jumpUser.trim()) {
+            throw new Error("跳板机的主机和用户名不能为空");
+          }
+          const jumpPort = Number(form.jumpPort) || 22;
+          const jumpAuth = await buildAuth(
+            form.jumpAuthMode,
+            form.jumpPassword,
+            form.jumpKeyText,
+            "",
+            initial?.jump[0]?.auth,
+            `${form.name.trim()} 跳板机`,
+          );
+          jump.push({
+            target: { host: form.jumpHost.trim(), port: jumpPort, user: form.jumpUser.trim() },
+            auth: jumpAuth,
+          });
+        }
+
+        profile = {
+          id: initial?.id ?? crypto.randomUUID(),
+          name: form.name.trim(),
+          group: form.group.trim() || null,
+          protocol: form.protocol,
+          target: {
+            host: form.host.trim(),
+            port,
+            user: form.user.trim(),
+          },
+          auth,
+          jump,
+          tags,
+          options:
+            form.protocol === "rdp"
+              ? { rdp: { ...form.rdp, domain: (form.rdp.domain ?? "").trim() || null } }
+              : {},
+        };
+      }
       const saved = await profileUpsert(profile);
       onSaved(saved);
       onClose();
@@ -253,6 +381,16 @@ export function SessionDialog({ open, initial, onClose, onSaved, onError }: Prop
       setSaving(false);
     }
   };
+
+  const presetId = matchSerialPreset(form.serial);
+  const knownPort = ports.some((port) => port.port_name === form.serial.port);
+  const portHint = portsLoading
+    ? "正在枚举系统串口…"
+    : portsError
+      ? `枚举失败：${portsError}。可直接手动填写端口名。`
+      : ports.length === 0
+        ? "未检测到串口设备。请连接设备后点击刷新，或手动填写端口名。"
+        : "同时插入多个 USB 转串口时，可按厂商 / 产品 / 序列号区分。";
 
   return (
     <div className="dlg-mask" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
@@ -280,6 +418,14 @@ export function SessionDialog({ open, initial, onClose, onSaved, onError }: Prop
             </button>
             <button
               role="tab"
+              aria-selected={form.protocol === "serial"}
+              className={form.protocol === "serial" ? "is-active" : ""}
+              onClick={() => update("protocol", "serial")}
+            >
+              串口
+            </button>
+            <button
+              role="tab"
               aria-selected={form.protocol === "rdp"}
               className={form.protocol === "rdp" ? "is-active" : ""}
               onClick={() => {
@@ -303,23 +449,193 @@ export function SessionDialog({ open, initial, onClose, onSaved, onError }: Prop
               标签
               <input value={form.tags} onChange={(e) => update("tags", e.target.value)} placeholder="web, prod" />
             </label>
-            <label className="span-2">
-              主机 *
-              <input value={form.host} onChange={(e) => update("host", e.target.value)} placeholder="10.0.0.10 或 example.com" />
-            </label>
-            <label>
-              端口 *
-              <input value={form.port} onChange={(e) => update("port", e.target.value)} />
-            </label>
-            <label>
-              用户名
-              <input
-                value={form.user}
-                onChange={(e) => update("user", e.target.value)}
-                placeholder={form.protocol === "rdp" ? "Administrator" : "root"}
-              />
-            </label>
           </div>
+
+          {form.protocol !== "serial" && (
+            <div className="form-grid">
+              <label className="span-2">
+                主机 *
+                <input value={form.host} onChange={(e) => update("host", e.target.value)} placeholder="10.0.0.10 或 example.com" />
+              </label>
+              <label>
+                端口 *
+                <input value={form.port} onChange={(e) => update("port", e.target.value)} />
+              </label>
+              <label>
+                用户名
+                <input
+                  value={form.user}
+                  onChange={(e) => update("user", e.target.value)}
+                  placeholder={form.protocol === "rdp" ? "Administrator" : "root"}
+                />
+              </label>
+            </div>
+          )}
+
+          {form.protocol === "serial" && (
+            <>
+              <div className="section-title">串口参数</div>
+              <div className="form-grid">
+                <label className="span-2">
+                  参数预设
+                  <select value={presetId} onChange={(e) => applyPreset(e.target.value)}>
+                    {SERIAL_PRESETS.map((preset) => (
+                      <option key={preset.id} value={preset.id}>
+                        {preset.label}
+                      </option>
+                    ))}
+                    <option value="custom">自定义</option>
+                  </select>
+                  <span className="muted">
+                    预设只回填波特率 / 数据位 / 停止位 / 校验 / 流控，不改变端口；单独修改任一参数后自动显示为自定义。
+                  </span>
+                </label>
+
+                <div className="form-field span-2">
+                  <span className="field-label">串口端口 *</span>
+                  <div className="field-row">
+                    {ports.length > 0 ? (
+                      <select
+                        value={form.serial.port}
+                        onChange={(e) => updateSerial({ port: e.target.value })}
+                      >
+                        {!form.serial.port && <option value="">请选择端口</option>}
+                        {form.serial.port && !knownPort && (
+                          <option value={form.serial.port}>
+                            {form.serial.port}（当前配置，未检测到）
+                          </option>
+                        )}
+                        {ports.map((port) => (
+                          <option key={port.port_name} value={port.port_name}>
+                            {port.description
+                              ? `${port.description} (${port.port_name})`
+                              : port.port_name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        value={form.serial.port}
+                        onChange={(e) => updateSerial({ port: e.target.value })}
+                        placeholder="COM3 或 /dev/ttyUSB0"
+                      />
+                    )}
+                    <button
+                      type="button"
+                      className="btn-ghost sm"
+                      onClick={() => void refreshPorts()}
+                      disabled={portsLoading}
+                    >
+                      {portsLoading ? "刷新中…" : "刷新"}
+                    </button>
+                  </div>
+                  <span className="muted">{portHint}</span>
+                </div>
+
+                <label>
+                  波特率 *
+                  <input
+                    list="baud-presets"
+                    value={form.serial.baud_rate}
+                    onChange={(e) => updateSerial({ baud_rate: Number(e.target.value) || 0 })}
+                    placeholder="115200"
+                  />
+                  <datalist id="baud-presets">
+                    {[9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600].map((value) => (
+                      <option key={value} value={value} />
+                    ))}
+                  </datalist>
+                </label>
+                <label>
+                  数据位
+                  <select
+                    value={form.serial.data_bits}
+                    onChange={(e) => updateSerial({ data_bits: Number(e.target.value) })}
+                  >
+                    {[5, 6, 7, 8].map((value) => (
+                      <option key={value} value={value}>
+                        {value}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  停止位
+                  <select
+                    value={form.serial.stop_bits}
+                    onChange={(e) => updateSerial({ stop_bits: Number(e.target.value) })}
+                  >
+                    <option value={1}>1</option>
+                    <option value={2}>2</option>
+                  </select>
+                </label>
+                <label>
+                  校验
+                  <select
+                    value={form.serial.parity}
+                    onChange={(e) => updateSerial({ parity: e.target.value as SerialParity })}
+                  >
+                    <option value="none">无（N）</option>
+                    <option value="odd">奇（O）</option>
+                    <option value="even">偶（E）</option>
+                  </select>
+                </label>
+                <label>
+                  流控
+                  <select
+                    value={form.serial.flow_control}
+                    onChange={(e) =>
+                      updateSerial({ flow_control: e.target.value as SerialFlowControl })
+                    }
+                  >
+                    <option value="none">无</option>
+                    <option value="hardware">硬件（RTS/CTS）</option>
+                    <option value="software">软件（XON/XOFF）</option>
+                  </select>
+                </label>
+                <label className="inline">
+                  <input
+                    type="checkbox"
+                    checked={form.serial.dtr}
+                    onChange={(e) => updateSerial({ dtr: e.target.checked })}
+                  />
+                  DTR 拉高（默认开启）
+                </label>
+                <label className="inline">
+                  <input
+                    type="checkbox"
+                    checked={form.serial.rts}
+                    onChange={(e) => updateSerial({ rts: e.target.checked })}
+                  />
+                  RTS 拉高（默认开启）
+                </label>
+                <label className="inline">
+                  <input
+                    type="checkbox"
+                    checked={form.serial.local_echo}
+                    onChange={(e) => updateSerial({ local_echo: e.target.checked })}
+                  />
+                  本地回显（默认关闭）
+                </label>
+                <label>
+                  换行处理
+                  <select
+                    value={form.serial.newline}
+                    onChange={(e) => updateSerial({ newline: e.target.value as SerialNewline })}
+                  >
+                    <option value="raw">原样（默认）</option>
+                    <option value="cr_to_crlf">CR → CRLF</option>
+                    <option value="lf_to_crlf">LF → CRLF</option>
+                  </select>
+                </label>
+                <p className="serial-hint span-2">
+                  DTR/RTS 默认拉高：部分交换机 console 需要 DTR 有效才会输出，连接后可在终端面板顶部实时切换，立即生效；
+                  启用硬件流控时 RTS 由驱动接管。本地回显默认关闭，设备自身已回显时不会重复显示；开启后会把你输入的字符显示在本地。
+                  换行默认原样透传，遇到设备显示错行再改为 CR→CRLF 或 LF→CRLF。
+                </p>
+              </div>
+            </>
+          )}
 
           {form.protocol === "rdp" && (
             <>

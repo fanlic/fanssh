@@ -84,6 +84,13 @@ pub struct SftpOpenResp {
     pub home: String,
 }
 
+/// 系统串口枚举结果。`description` 带上厂商/产品/序列号，便于区分同型号设备。
+#[derive(Clone, Debug, Serialize)]
+pub struct SerialPortInfo {
+    pub port_name: String,
+    pub description: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AiSettingsInput {
     pub provider: String,

@@ -165,7 +165,7 @@ jobs:
           body: |
             FanSSH ${{ steps.meta.outputs.version }} 更新通道。
 
-            这里只放安装包、便携包和自动更新用的 `latest.json`，源码在私有仓库。
+            这里只放安装包、便携包和自动更新用的 `latest.json`，源码见 fanlic/fanssh。
 
             - 安装包 `FanSSH_*_x64-setup.exe`：已安装用户无需手动下载，应用内「设置 → 检查更新」即可升级。
             - 便携包 `FanSSH-portable-windows-x64.zip`：便携版不支持自更新，请下载新版 zip 解压覆盖。

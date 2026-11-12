@@ -7,6 +7,7 @@ import type {
   Profile,
   RdpHandleDto,
   RemoteEntry,
+  SerialPortInfo,
   SftpOpenResp,
   TermEvent,
   TransferEvent,
@@ -42,6 +43,35 @@ export function termClose(session: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// 串口
+// ---------------------------------------------------------------------------
+
+export function serialListPorts(): Promise<SerialPortInfo[]> {
+  return invoke("serial_list_ports");
+}
+
+export async function serialOpen(
+  profileId: string,
+  onEvent: (event: TermEvent) => void,
+): Promise<string> {
+  const channel = new Channel<TermEvent>();
+  channel.onmessage = onEvent;
+  return invoke<string>("serial_open", { profileId, onEvent: channel });
+}
+
+export function serialInput(session: string, data: Uint8Array): Promise<void> {
+  return invoke("serial_input", { session, bytes: Array.from(data) });
+}
+
+export function serialSetLines(session: string, dtr: boolean, rts: boolean): Promise<void> {
+  return invoke("serial_set_lines", { session, dtr, rts });
+}
+
+export function serialClose(session: string): Promise<void> {
+  return invoke("serial_close", { session });
+}
+
+// ---------------------------------------------------------------------------
 // 服务器配置
 // ---------------------------------------------------------------------------
 
@@ -57,12 +87,12 @@ export function profileDelete(id: string): Promise<void> {
   return invoke("profile_delete", { id });
 }
 
-export function profileExport(path: string): Promise<number> {
-  return invoke("profile_export", { path });
+export function profileExport(path: string, passphrase: string): Promise<number> {
+  return invoke("profile_export", { path, passphrase });
 }
 
-export function profileImport(path: string): Promise<number> {
-  return invoke("profile_import", { path });
+export function profileImport(path: string, passphrase?: string): Promise<number> {
+  return invoke("profile_import", { path, passphrase: passphrase ?? null });
 }
 
 // ---------------------------------------------------------------------------

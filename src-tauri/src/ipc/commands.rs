@@ -9,9 +9,12 @@ use crate::app::settings::AiSettingsFile;
 use crate::app::AppState;
 use crate::ipc::dto::{
     AiChatRequest, AiSettingsInput, AiSettingsView, Nl2CmdResult, RdpHandleDto, RemoteEntry,
-    SftpOpenResp, TermEvent, TransferEvent, UpdateEvent, UpdateInfoDto, UpdaterStatusDto,
+    SerialPortInfo, SftpOpenResp, TermEvent, TransferEvent, UpdateEvent, UpdateInfoDto,
+    UpdaterStatusDto,
 };
 use crate::ipc::error::{AppError, AppResult};
+use crate::profile::ImportError;
+use crate::serial::SerialManager;
 use crate::session::model::{AuthRef, Profile, Protocol, SecretKind, SessionId};
 use crate::vault::SecretRef;
 
@@ -67,6 +70,59 @@ pub async fn term_close(state: State<'_, AppState>, session: SessionId) -> AppRe
 }
 
 // ---------------------------------------------------------------------------
+// 串口
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn serial_list_ports() -> AppResult<Vec<SerialPortInfo>> {
+    SerialManager::list_ports()
+}
+
+#[tauri::command]
+pub async fn serial_open(
+    state: State<'_, AppState>,
+    profile_id: Uuid,
+    on_event: TauriChannel<TermEvent>,
+) -> AppResult<SessionId> {
+    let profile = state
+        .profiles
+        .get(&profile_id)
+        .ok_or_else(|| AppError::new("profile.not_found", "服务器配置不存在"))?;
+    if !matches!(profile.protocol, Protocol::Serial) {
+        return Err(AppError::new(
+            "serial.invalid_profile",
+            "该配置不是串口协议，无法打开串口终端",
+        ));
+    }
+    state.serial.open(profile, on_event)
+}
+
+#[tauri::command]
+pub async fn serial_input(
+    state: State<'_, AppState>,
+    session: SessionId,
+    bytes: Vec<u8>,
+) -> AppResult<()> {
+    state.serial.write(session, bytes)
+}
+
+/// 运行中切换 DTR / RTS；部分交换机 console 需要 DTR 有效才有输出。
+#[tauri::command]
+pub async fn serial_set_lines(
+    state: State<'_, AppState>,
+    session: SessionId,
+    dtr: bool,
+    rts: bool,
+) -> AppResult<()> {
+    state.serial.set_lines(session, dtr, rts)
+}
+
+#[tauri::command]
+pub async fn serial_close(state: State<'_, AppState>, session: SessionId) -> AppResult<()> {
+    state.serial.close(session)
+}
+
+// ---------------------------------------------------------------------------
 // 服务器配置
 // ---------------------------------------------------------------------------
 
@@ -106,19 +162,40 @@ pub async fn profile_delete(state: State<'_, AppState>, id: Uuid) -> AppResult<(
 }
 
 #[tauri::command]
-pub async fn profile_export(state: State<'_, AppState>, path: String) -> AppResult<usize> {
+pub async fn profile_export(
+    state: State<'_, AppState>,
+    path: String,
+    passphrase: String,
+) -> AppResult<usize> {
     state
         .profiles
-        .export(&PathBuf::from(path))
+        .export(&PathBuf::from(path), &passphrase, &state.vault)
         .map_err(|e| AppError::new("profile.export_failed", format!("{e:#}")))
 }
 
 #[tauri::command]
-pub async fn profile_import(state: State<'_, AppState>, path: String) -> AppResult<usize> {
-    state
+pub async fn profile_import(
+    state: State<'_, AppState>,
+    path: String,
+    passphrase: Option<String>,
+) -> AppResult<usize> {
+    match state
         .profiles
-        .import(&PathBuf::from(path))
-        .map_err(|e| AppError::new("profile.import_failed", format!("{e:#}")))
+        .import(&PathBuf::from(path), passphrase.as_deref(), &state.vault)
+    {
+        Ok(count) => Ok(count),
+        Err(ImportError::PassphraseRequired) => Err(AppError::new(
+            "profile.passphrase_required",
+            "该文件已加密，请输入导出口令",
+        )),
+        Err(ImportError::BadPassphrase) => Err(AppError::new(
+            "profile.bad_passphrase",
+            "口令错误或文件已损坏",
+        )),
+        Err(ImportError::Failed(error)) => {
+            Err(AppError::new("profile.import_failed", format!("{error:#}")))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

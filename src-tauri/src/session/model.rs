@@ -23,6 +23,7 @@ impl std::fmt::Display for SessionId {
 pub enum Protocol {
     Ssh,
     Rdp,
+    Serial,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -132,10 +133,111 @@ impl Default for RdpPrefs {
     }
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SerialParity {
+    None,
+    Odd,
+    Even,
+}
+
+impl Default for SerialParity {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SerialFlowControl {
+    None,
+    Hardware,
+    Software,
+}
+
+impl Default for SerialFlowControl {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+/// 发送换行策略。串口设备对行尾要求不一，默认原样透传。
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SerialNewline {
+    Raw,
+    CrToCrlf,
+    LfToCrlf,
+}
+
+impl Default for SerialNewline {
+    fn default() -> Self {
+        Self::Raw
+    }
+}
+
+/// 串口参数。与凭据无关，随 profile 持久化。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SerialPrefs {
+    /// 系统端口名：Windows 为 `COM3`，Unix 为 `/dev/ttyUSB0`。
+    #[serde(default)]
+    pub port: String,
+    #[serde(default = "default_baud_rate")]
+    pub baud_rate: u32,
+    #[serde(default = "default_data_bits")]
+    pub data_bits: u8,
+    #[serde(default = "default_stop_bits")]
+    pub stop_bits: u8,
+    #[serde(default)]
+    pub parity: SerialParity,
+    #[serde(default)]
+    pub flow_control: SerialFlowControl,
+    /// DTR 默认拉高：部分交换机 console 需要 DTR 有效才有输出。
+    #[serde(default = "default_true")]
+    pub dtr: bool,
+    /// RTS 默认拉高（硬件流控时由驱动接管）。
+    #[serde(default = "default_true")]
+    pub rts: bool,
+    /// 本地回显默认关闭，避免设备已回显时重复显示。
+    #[serde(default)]
+    pub local_echo: bool,
+    #[serde(default)]
+    pub newline: SerialNewline,
+}
+
+fn default_baud_rate() -> u32 {
+    115200
+}
+fn default_data_bits() -> u8 {
+    8
+}
+fn default_stop_bits() -> u8 {
+    1
+}
+
+impl Default for SerialPrefs {
+    fn default() -> Self {
+        Self {
+            port: String::new(),
+            baud_rate: default_baud_rate(),
+            data_bits: default_data_bits(),
+            stop_bits: default_stop_bits(),
+            parity: SerialParity::None,
+            flow_control: SerialFlowControl::None,
+            dtr: true,
+            rts: true,
+            local_echo: false,
+            newline: SerialNewline::Raw,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ProfileOptions {
     #[serde(default)]
     pub rdp: Option<RdpPrefs>,
+    #[serde(default)]
+    pub serial: Option<SerialPrefs>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -166,6 +268,11 @@ impl Profile {
 
     pub fn rdp_prefs(&self) -> RdpPrefs {
         self.options.rdp.clone().unwrap_or_default()
+    }
+
+    /// 串口参数；未配置时回落到默认值（115200 8N1，无流控）。
+    pub fn serial_prefs(&self) -> SerialPrefs {
+        self.options.serial.clone().unwrap_or_default()
     }
 }
 

@@ -46,6 +46,7 @@
 
   --sidebar-w: 240px;
   --ai-w: 360px;
+  --activitybar-w: 40px;
   --titlebar-h: 32px;
   --tabbar-h: 36px;
   --statusbar-h: 24px;
@@ -373,9 +374,35 @@ kbd {
   border-color: var(--border-strong);
   background: var(--hover);
 }
-.tb-quick span {
+.tb-quick:focus-within {
+  border-color: var(--accent);
+}
+.tb-quick input {
   flex: 1;
-  text-align: left;
+  min-width: 0;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+}
+.tb-quick input:hover,
+.tb-quick input:focus {
+  border: none;
+}
+.tb-quick input::placeholder {
+  color: var(--text-dim);
+}
+.tb-clear {
+  display: inline-flex;
+  color: var(--text-dim);
+  padding: 2px;
+  border-radius: var(--radius-1);
+}
+.tb-clear:hover {
+  background: var(--bg);
+  color: var(--text);
 }
 
 .tb-right {
@@ -392,6 +419,7 @@ kbd {
 }
 
 .workspace {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -432,46 +460,6 @@ kbd {
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 0 5px;
-}
-
-.sb-search {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin: 0 var(--space-4);
-  height: 26px;
-  padding: 0 var(--space-3);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-2);
-  color: var(--text-dim);
-  transition: border-color var(--dur-base) var(--ease-out);
-}
-.sb-search:focus-within {
-  border-color: var(--accent);
-}
-.sb-search input {
-  flex: 1;
-  min-width: 0;
-  height: 24px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  font-size: 12px;
-}
-.sb-search input:hover,
-.sb-search input:focus {
-  border: none;
-}
-.sb-clear {
-  display: inline-flex;
-  color: var(--text-dim);
-  padding: 2px;
-  border-radius: var(--radius-1);
-}
-.sb-clear:hover {
-  background: var(--hover);
-  color: var(--text);
 }
 
 .sb-actions {
@@ -571,6 +559,11 @@ kbd {
   color: var(--warning);
   border-color: rgba(210, 153, 34, 0.45);
   background: var(--warning-weak);
+}
+.proto-tag.serial {
+  color: var(--success);
+  border-color: rgba(63, 185, 80, 0.45);
+  background: var(--success-weak);
 }
 
 .s-name {
@@ -709,10 +702,6 @@ kbd {
   background: var(--hover);
   color: var(--text);
   font-weight: 600;
-}
-.proto-tab:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
 }
 .pcount {
   font: 10px/14px var(--font-mono);
@@ -981,11 +970,53 @@ kbd {
   white-space: nowrap;
 }
 
+/* 串口控制线开关：DTR / RTS 运行中可直接切换 */
+.pane-lines {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.line-btn {
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-1);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font: 600 10px/14px var(--font-mono);
+  letter-spacing: 0.04em;
+}
+.line-btn:hover {
+  color: var(--text);
+}
+.line-btn.on {
+  color: var(--success);
+  border-color: rgba(63, 185, 80, 0.45);
+  background: var(--success-weak);
+}
+.line-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .terminal-host {
   flex: 1;
   min-height: 0;
   padding: var(--space-3) 0 0 var(--space-4);
   overflow: hidden;
+}
+/* 内联命令建议：叠在终端上方，不参与终端选区与滚动 */
+.ghost-text {
+  position: absolute;
+  display: none;
+  white-space: pre;
+  pointer-events: none;
+  z-index: 2;
+  color: var(--text-dim);
+  opacity: 0.6;
+  font-family: "Cascadia Mono", "JetBrains Mono", Consolas, "Noto Sans Mono CJK SC", monospace;
+  font-size: 13px;
+  line-height: 1.4;
 }
 .terminal-host .xterm {
   height: 100%;
@@ -1156,6 +1187,50 @@ kbd {
   color: var(--text);
 }
 
+/* ---------- 活动栏 ---------- */
+.activitybar {
+  width: var(--activitybar-w);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  padding-top: var(--space-3);
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+}
+
+.ab-btn {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.ab-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.ab-btn.is-active {
+  color: var(--text);
+}
+.ab-btn.is-active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: var(--accent);
+}
+
 /* ---------- AI 面板 ---------- */
 .ai-panel {
   width: var(--ai-w);
@@ -1163,8 +1238,26 @@ kbd {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow: hidden;
   background: var(--panel);
   border-left: 1px solid var(--border);
+  transition: width var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-out);
+}
+/* 折叠时宽度归零，但内容仍挂载，展开后恢复原状 */
+.ai-panel.is-collapsed {
+  width: 0;
+  border-left-color: transparent;
+  visibility: hidden;
+  transition: width var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-out),
+    visibility 0s linear var(--dur-base);
+}
+
+/* 折叠过程中保持内部按原宽度排版，避免内容被挤扁 */
+.ai-panel > * {
+  width: calc(var(--ai-w) - 1px);
+  flex-shrink: 0;
 }
 
 .ai-head {
@@ -1520,12 +1613,14 @@ kbd {
 }
 
 /* ---------- 抽屉 ---------- */
+/* 抽屉锚在终端区（不含活动栏），随工作区定位 */
 .drawer-mask {
-  position: fixed;
-  inset: var(--titlebar-h) 0 0 0;
+  position: absolute;
+  inset: 0;
   z-index: 50;
   display: flex;
   justify-content: flex-end;
+  overflow: hidden;
   background: var(--overlay);
 }
 
@@ -1546,8 +1641,7 @@ kbd {
   }
 }
 .sftp-drawer {
-  width: 760px;
-  max-width: 92vw;
+  width: min(760px, 55vw, 100%);
 }
 
 .drawer-head {
@@ -1827,6 +1921,16 @@ kbd {
   width: 560px;
   max-width: calc(100vw - 48px);
 }
+.dlg-pass {
+  width: 400px;
+  max-width: calc(100vw - 48px);
+}
+.dlg-text {
+  margin: 0 0 var(--space-4);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-dim);
+}
 
 .dlg-head {
   display: flex;
@@ -1921,6 +2025,35 @@ kbd {
 }
 .form-grid .span-2 {
   grid-column: span 2;
+}
+.form-grid .form-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-dim);
+  min-width: 0;
+}
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.field-row input,
+.field-row select {
+  flex: 1;
+  min-width: 0;
+}
+.field-row .btn-ghost {
+  flex: none;
+}
+.serial-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 17px;
+  color: var(--text-dim);
 }
 .form-grid label.inline {
   flex-direction: row;

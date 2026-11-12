@@ -27,6 +27,25 @@ export interface TabStatePatch {
 
 let paneSeq = 0;
 
+const AI_OPEN_KEY = "fanssh.ai-panel-open";
+
+/** AI 面板折叠状态在刷新后保持；没有记录时默认折叠。 */
+function readAiOpen(): boolean {
+  try {
+    return window.localStorage.getItem(AI_OPEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeAiOpen(open: boolean): void {
+  try {
+    window.localStorage.setItem(AI_OPEN_KEY, open ? "1" : "0");
+  } catch {
+    // 隐私模式下写入失败不影响本次会话
+  }
+}
+
 function newPane(profile: Profile): PaneState {
   paneSeq += 1;
   return {
@@ -74,7 +93,7 @@ export const useAppStore = create<AppStore>()((set, get) => ({
   tabs: [],
   activeTabId: null,
   sftpProfileId: null,
-  aiOpen: true,
+  aiOpen: readAiOpen(),
 
   loadProfiles: async () => {
     set({ profilesLoading: true, profilesError: null });
@@ -193,7 +212,12 @@ export const useAppStore = create<AppStore>()((set, get) => ({
     })),
 
   setSftpProfileId: (id) => set({ sftpProfileId: id }),
-  toggleAi: () => set((state) => ({ aiOpen: !state.aiOpen })),
+  toggleAi: () =>
+    set((state) => {
+      const aiOpen = !state.aiOpen;
+      writeAiOpen(aiOpen);
+      return { aiOpen };
+    }),
 }));
 
 /** 返回当前激活 pane（供 AI 侧栏定位终端）。 */

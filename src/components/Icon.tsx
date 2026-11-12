@@ -26,6 +26,7 @@ export type IconName =
   | "lock"
   | "clock"
   | "spark"
+  | "panel"
   | "copy"
   | "play"
   | "trash"
@@ -111,6 +112,12 @@ const PATHS: Record<IconName, JSX.Element> = {
     </>
   ),
   spark: <path d="M8 1.5l1.6 4.4L14 7.5 9.6 9 8 14.5 6.4 9 2 7.5l4.4-1.6L8 1.5z" />,
+  panel: (
+    <>
+      <rect x="2" y="3" width="12" height="10" rx="1.5" />
+      <path d="M10 3v10" />
+    </>
+  ),
   copy: (
     <>
       <rect x="5" y="5" width="8" height="8" rx="1" />

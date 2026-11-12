@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { errorText, profileExport, profileImport, rdpLaunch, updaterStatus } from "./api";
 import { AiSidebar } from "./components/AiSidebar";
+import { ActivityBar } from "./components/ActivityBar";
 import { Icon } from "./components/Icon";
+import { PassphraseDialog } from "./components/PassphraseDialog";
 import { SessionDialog } from "./components/SessionDialog";
 import { SessionSidebar } from "./components/SessionSidebar";
 import { SettingsDialog } from "./components/SettingsDialog";
@@ -33,8 +35,9 @@ export default function App() {
   const [editing, setEditing] = useState<Profile | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [searchSignal, setSearchSignal] = useState(0);
-  const [version, setVersion] = useState("1.0.3");
+  const [query, setQuery] = useState("");
+  const [version, setVersion] = useState("1.0.4");
+  const quickSearchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     void loadProfiles();
@@ -56,7 +59,8 @@ export default function App() {
       if (key === "k") {
         event.preventDefault();
         setSidebarOpen(true);
-        setSearchSignal((value) => value + 1);
+        quickSearchRef.current?.focus();
+        quickSearchRef.current?.select();
       } else if (key === "b") {
         event.preventDefault();
         setSidebarOpen((value) => !value);
@@ -103,7 +107,7 @@ export default function App() {
 
   const handleSplit = () => {
     if (!activeTab) {
-      notify("先打开一个 SSH 会话再分屏", "error");
+      notify("先打开一个终端会话再分屏", "error");
       return;
     }
     const pane = activeTab.panes[activeTab.activePane];
@@ -112,36 +116,78 @@ export default function App() {
       notify("找不到当前面板对应的服务器配置", "error");
       return;
     }
-    if (profile.protocol !== "ssh") {
+    if (profile.protocol === "rdp") {
       notify("RDP 会话不支持终端分屏", "error");
       return;
     }
     openProfileInSplit(activeTab.id, profile);
   };
 
+  const handleSftpToggle = () => {
+    if (sftpProfileId) {
+      setSftpProfileId(null);
+      return;
+    }
+    if (!activeProfile || activeProfile.protocol !== "ssh") {
+      notify("先打开一个 SSH 会话再使用 SFTP", "error");
+      return;
+    }
+    setSftpProfileId(activeProfile.id);
+  };
+
+  const [passDialog, setPassDialog] = useState<{ mode: "export" | "import"; path: string } | null>(
+    null,
+  );
+  const [passError, setPassError] = useState<string | null>(null);
+  const [passBusy, setPassBusy] = useState(false);
+
   const handleImport = async () => {
-    const path = await openDialog({ filters: [{ name: "JSON", extensions: ["json"] }] });
+    const path = await openDialog({
+      filters: [{ name: "FanSSH 配置", extensions: ["fansshx", "json"] }],
+    });
     if (!path || Array.isArray(path)) return;
     try {
       const count = await profileImport(path);
       await loadProfiles();
-      notify(`已导入 ${count} 个配置（凭据需重新填写）`);
+      notify(`已导入 ${count} 个配置`);
     } catch (error) {
+      if ((error as { code?: string } | null)?.code === "profile.passphrase_required") {
+        setPassError(null);
+        setPassDialog({ mode: "import", path });
+        return;
+      }
       notify(errorText(error), "error");
     }
   };
 
   const handleExport = async () => {
     const path = await saveDialog({
-      defaultPath: "fanssh-profiles.json",
-      filters: [{ name: "JSON", extensions: ["json"] }],
+      defaultPath: "fanssh-profiles.fansshx",
+      filters: [{ name: "FanSSH 加密配置", extensions: ["fansshx"] }],
     });
     if (!path) return;
+    setPassError(null);
+    setPassDialog({ mode: "export", path });
+  };
+
+  const handlePassphrase = async (passphrase: string) => {
+    if (!passDialog) return;
+    setPassBusy(true);
+    setPassError(null);
     try {
-      const count = await profileExport(path);
-      notify(`已导出 ${count} 个配置（不含密码/私钥）`);
+      if (passDialog.mode === "export") {
+        const count = await profileExport(passDialog.path, passphrase);
+        notify(`已导出 ${count} 个配置（口令加密）`);
+      } else {
+        const count = await profileImport(passDialog.path, passphrase);
+        await loadProfiles();
+        notify(`已导入 ${count} 个配置，凭据已写入本地凭据库`);
+      }
+      setPassDialog(null);
     } catch (error) {
-      notify(errorText(error), "error");
+      setPassError(errorText(error));
+    } finally {
+      setPassBusy(false);
     }
   };
 
@@ -164,21 +210,34 @@ export default function App() {
           <span className="tb-div" />
           <span className="tb-ws">本地工作区</span>
         </div>
-        <button className="tb-quick" onClick={() => { setSidebarOpen(true); setSearchSignal((v) => v + 1); }}>
+        <div className="tb-quick">
           <Icon name="search" size={13} />
-          <span>快速连接或搜索会话</span>
-          <kbd>Ctrl K</kbd>
-        </button>
+          <input
+            ref={quickSearchRef}
+            value={query}
+            placeholder="快速连接或搜索会话"
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setSidebarOpen(true);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                setQuery("");
+                quickSearchRef.current?.blur();
+              }
+            }}
+          />
+          {query ? (
+            <button className="tb-clear" title="清空搜索" onClick={() => setQuery("")}>
+              <Icon name="x" size={11} />
+            </button>
+          ) : (
+            <kbd>Ctrl K</kbd>
+          )}
+        </div>
         <div className="tb-right">
           <button className="icon-btn" title="设置" onClick={() => setSettingsOpen(true)}>
             <Icon name="gear" size={15} />
-          </button>
-          <button
-            className={`icon-btn${aiOpen ? " is-on" : ""}`}
-            title="AI 面板 (Ctrl J)"
-            onClick={toggleAi}
-          >
-            <Icon name="spark" size={15} />
           </button>
         </div>
       </header>
@@ -192,7 +251,8 @@ export default function App() {
             onExport={handleExport}
             onRdp={handleRdp}
             onNotice={notify}
-            focusSignal={searchSignal}
+            query={query}
+            onQueryChange={setQuery}
           />
         )}
 
@@ -223,12 +283,12 @@ export default function App() {
                       <Icon name="term" size={20} />
                     </span>
                     <h2>FanSSH</h2>
-                    <p>SSH 终端 · SFTP · AI 运维助手 · RDP 调用</p>
+                    <p>SSH / 串口终端 · SFTP · AI 运维助手 · RDP 调用</p>
                     <div className="se-actions">
                       <button className="btn-primary" onClick={handleNew}>
                         新建服务器配置
                       </button>
-                      <button className="btn-ghost" onClick={() => { setSidebarOpen(true); setSearchSignal((v) => v + 1); }}>
+                      <button className="btn-ghost" onClick={() => { setSidebarOpen(true); quickSearchRef.current?.focus(); }}>
                         搜索已有会话
                       </button>
                     </div>
@@ -248,8 +308,9 @@ export default function App() {
               {activePane && <span className="sb-meta">{activePane.profileName}</span>}
               {activeProfile && (
                 <span className="sb-meta mono">
-                  {activeProfile.target.user ? `${activeProfile.target.user}@` : ""}
-                  {activeProfile.target.host}
+                  {activeProfile.protocol === "serial"
+                    ? `${activeProfile.target.host} · ${activeProfile.options.serial?.baud_rate ?? 0}`
+                    : `${activeProfile.target.user ? `${activeProfile.target.user}@` : ""}${activeProfile.target.host}`}
                 </span>
               )}
             </span>
@@ -266,9 +327,24 @@ export default function App() {
             </button>
             <span className="sb-meta">{profiles.length} 个配置</span>
           </footer>
+
+          {sftpProfile && (
+            <SftpPanel
+              profileId={sftpProfile.id}
+              profileName={sftpProfile.name}
+              onClose={() => setSftpProfileId(null)}
+            />
+          )}
         </main>
 
-        {aiOpen && <AiSidebar />}
+        <ActivityBar
+          sftpOpen={sftpProfileId !== null}
+          aiOpen={aiOpen}
+          onToggleSftp={handleSftpToggle}
+          onToggleAi={toggleAi}
+        />
+
+        <AiSidebar collapsed={!aiOpen} />
       </div>
 
       <SettingsDialog
@@ -288,13 +364,18 @@ export default function App() {
         onError={(message) => notify(message, "error")}
       />
 
-      {sftpProfile && (
-        <SftpPanel
-          profileId={sftpProfile.id}
-          profileName={sftpProfile.name}
-          onClose={() => setSftpProfileId(null)}
-        />
-      )}
+      <PassphraseDialog
+        open={passDialog !== null}
+        mode={passDialog?.mode ?? "export"}
+        busy={passBusy}
+        error={passError}
+        onSubmit={handlePassphrase}
+        onClose={() => {
+          if (passBusy) return;
+          setPassDialog(null);
+          setPassError(null);
+        }}
+      />
 
       {notice && (
         <div className={`toast toast-${notice.kind}`} onClick={() => setNotice(null)}>
