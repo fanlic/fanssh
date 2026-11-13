@@ -42,7 +42,7 @@ impl client::Handler for ClientHandler {
 /// 已建立的 SSH 连接。`_intermediates` 必须与目标连接同生命周期存活，
 /// 否则跳板通道会被提前关闭。
 pub struct ConnectedSsh {
-    pub handle: Handle<ClientHandler>,
+    pub handle: Arc<Handle<ClientHandler>>,
     pub _intermediates: Vec<Handle<ClientHandler>>,
 }
 
@@ -133,7 +133,7 @@ pub async fn connect_profile(profile: &Profile, vault: &Vault) -> Result<Connect
     }
 
     Ok(ConnectedSsh {
-        handle,
+        handle: Arc::new(handle),
         _intermediates: intermediates,
     })
 }

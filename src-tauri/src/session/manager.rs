@@ -33,7 +33,7 @@ const CAPTURE_TIMEOUT: Duration = Duration::from_secs(20);
 pub struct SshManager {
     sessions: Arc<Mutex<HashMap<SessionId, mpsc::Sender<TermInput>>>>,
     /// 活跃 SSH 连接的句柄，供 Docker 等复用同一条连接开 exec 通道。
-    handles: Arc<Mutex<HashMap<SessionId, Handle<ClientHandler>>>>,
+    handles: Arc<Mutex<HashMap<SessionId, Arc<Handle<ClientHandler>>>>>,
 }
 
 impl SshManager {
@@ -98,7 +98,7 @@ impl SshManager {
         on_event: TauriChannel<TermEvent>,
     ) -> AppResult<SessionId> {
         let handle = self.handle(session).await?;
-        let mut channel = handle
+        let channel = handle
             .channel_open_session()
             .await
             .map_err(|e| AppError::new("ssh.channel_failed", e.to_string()))?;
@@ -175,7 +175,10 @@ impl SshManager {
             .map_err(|_| AppError::new("ssh.exec_timeout", "远端命令执行超时"))
     }
 
-    pub(crate) async fn handle(&self, session: SessionId) -> AppResult<Handle<ClientHandler>> {
+    pub(crate) async fn handle(
+        &self,
+        session: SessionId,
+    ) -> AppResult<Arc<Handle<ClientHandler>>> {
         self.handles
             .lock()
             .await
