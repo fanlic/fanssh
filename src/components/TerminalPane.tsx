@@ -228,6 +228,7 @@ export function TerminalPane({ tabId, pane, active }: Props) {
       return new TextEncoder().encode(out);
     };
 
+    let seedTimer: number | undefined;
     const dataSub = term.onData((data) => {
       const session = sessionRef.current;
       if (isSerial) {
@@ -295,6 +296,14 @@ export function TerminalPane({ tabId, pane, active }: Props) {
         }
         sessionRef.current = session;
         setPaneSession(tabId, pane.key, session);
+        // Docker「进入终端」：把命令写进输入行但不回车，留给用户确认 / 修改。
+        if (pane.initialInput) {
+          const seed = pane.initialInput;
+          seedTimer = window.setTimeout(() => {
+            if (disposedRef.current) return;
+            termInput(session, new TextEncoder().encode(seed)).catch(() => undefined);
+          }, 400);
+        }
       } catch (error) {
         if (disposedRef.current) return;
         setPaneStatus(tabId, pane.key, "error", errorText(error));
@@ -305,6 +314,7 @@ export function TerminalPane({ tabId, pane, active }: Props) {
 
     return () => {
       disposedRef.current = true;
+      if (seedTimer) window.clearTimeout(seedTimer);
       window.cancelAnimationFrame(raf);
       observer.disconnect();
       hideSuggestion();

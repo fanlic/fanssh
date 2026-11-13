@@ -63,6 +63,25 @@ export interface SerialPortInfo {
   description: string;
 }
 
+export interface DockerContainer {
+  id: string;
+  name: string;
+  image: string;
+  state: string;
+  status: string;
+  ports: string;
+}
+
+export interface DockerLogChunk {
+  stream: "stdout" | "stderr";
+  text: string;
+}
+
+export interface DockerLogs {
+  chunks: DockerLogChunk[];
+  truncated: boolean;
+}
+
 export interface Profile {
   id: string;
   name: string;

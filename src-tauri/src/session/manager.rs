@@ -1,3 +1,4 @@
+use russh::client::Handle;
 use russh::{client::Msg, Channel, ChannelMsg, Disconnect};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -9,7 +10,7 @@ use tokio::time::{interval, MissedTickBehavior};
 use crate::ipc::dto::{SessionState, TermEvent};
 use crate::ipc::error::{AppError, AppResult};
 use crate::session::model::{Profile, SessionId};
-use crate::transport::ssh::{connect_profile, ConnectedSsh};
+use crate::transport::ssh::{connect_profile, ClientHandler, ConnectedSsh};
 use crate::vault::Vault;
 
 enum TermInput {
@@ -18,9 +19,21 @@ enum TermInput {
     Close,
 }
 
+/// 一次性 exec 的输出（stdout/stderr/退出码）。
+pub struct ExecOutput {
+    pub stdout: String,
+    pub stderr: String,
+    pub code: Option<i32>,
+}
+
+const MAX_CAPTURE: usize = 4 * 1024 * 1024;
+const CAPTURE_TIMEOUT: Duration = Duration::from_secs(20);
+
 #[derive(Clone, Default)]
 pub struct SshManager {
     sessions: Arc<Mutex<HashMap<SessionId, mpsc::Sender<TermInput>>>>,
+    /// 活跃 SSH 连接的句柄，供 Docker 等复用同一条连接开 exec 通道。
+    handles: Arc<Mutex<HashMap<SessionId, Handle<ClientHandler>>>>,
 }
 
 impl SshManager {
@@ -55,6 +68,10 @@ impl SshManager {
 
         let (tx, rx) = mpsc::channel::<TermInput>(256);
         self.sessions.lock().await.insert(session_id, tx);
+        self.handles
+            .lock()
+            .await
+            .insert(session_id, connected.handle.clone());
 
         let _ = on_event.send(TermEvent::State {
             state: SessionState::Ready,
@@ -65,10 +82,106 @@ impl SshManager {
 
         let manager = self.clone();
         tokio::spawn(async move {
-            run_session(manager, session_id, connected, channel, rx, on_event).await;
+            run_session(manager, session_id, Some(connected), channel, rx, on_event).await;
         });
 
         Ok(session_id)
+    }
+
+    /// 在当前 SSH 会话上开一个新通道执行命令，并作为独立终端会话返回。
+    /// 连接本身复用原会话，不重新认证。
+    pub async fn open_exec(
+        &self,
+        session: SessionId,
+        command: String,
+        title: String,
+        on_event: TauriChannel<TermEvent>,
+    ) -> AppResult<SessionId> {
+        let handle = self.handle(session).await?;
+        let mut channel = handle
+            .channel_open_session()
+            .await
+            .map_err(|e| AppError::new("ssh.channel_failed", e.to_string()))?;
+        channel
+            .request_pty(true, "xterm-256color", 120, 32, 0, 0, &[])
+            .await
+            .map_err(|e| AppError::new("ssh.pty_failed", e.to_string()))?;
+        channel
+            .exec(true, command.as_str())
+            .await
+            .map_err(|e| AppError::new("ssh.exec_failed", e.to_string()))?;
+
+        let exec_id = SessionId::new();
+        let (tx, rx) = mpsc::channel::<TermInput>(256);
+        self.sessions.lock().await.insert(exec_id, tx);
+
+        let _ = on_event.send(TermEvent::State {
+            state: SessionState::Ready,
+        });
+        let _ = on_event.send(TermEvent::Title { title });
+
+        let manager = self.clone();
+        tokio::spawn(async move {
+            run_session(manager, exec_id, None, channel, rx, on_event).await;
+        });
+
+        Ok(exec_id)
+    }
+
+    /// 在现有 SSH 连接上执行一次性命令并收集输出（Docker 管理使用）。
+    pub async fn exec_capture(&self, session: SessionId, command: &str) -> AppResult<ExecOutput> {
+        let handle = self.handle(session).await?;
+        let mut channel = handle
+            .channel_open_session()
+            .await
+            .map_err(|e| AppError::new("ssh.channel_failed", e.to_string()))?;
+        channel
+            .exec(true, command)
+            .await
+            .map_err(|e| AppError::new("ssh.exec_failed", e.to_string()))?;
+
+        let collect = async {
+            let mut stdout: Vec<u8> = Vec::new();
+            let mut stderr: Vec<u8> = Vec::new();
+            let mut code = None;
+            while let Some(message) = channel.wait().await {
+                match message {
+                    ChannelMsg::Data { data } => {
+                        if stdout.len() < MAX_CAPTURE {
+                            stdout.extend_from_slice(&data);
+                        }
+                    }
+                    ChannelMsg::ExtendedData { data, .. } => {
+                        if stderr.len() < MAX_CAPTURE {
+                            stderr.extend_from_slice(&data);
+                        }
+                    }
+                    ChannelMsg::ExitStatus { exit_status } => {
+                        code = Some(exit_status as i32);
+                    }
+                    ChannelMsg::Eof | ChannelMsg::Close => break,
+                    _ => {}
+                }
+            }
+            ExecOutput {
+                stdout: String::from_utf8_lossy(&stdout).to_string(),
+                stderr: String::from_utf8_lossy(&stderr).to_string(),
+                code,
+            }
+        };
+
+        tokio::time::timeout(CAPTURE_TIMEOUT, collect)
+            .await
+            .map_err(|_| AppError::new("ssh.exec_timeout", "远端命令执行超时"))
+    }
+
+    pub(crate) async fn handle(&self, session: SessionId) -> AppResult<Handle<ClientHandler>> {
+        self.handles
+            .lock()
+            .await
+            .get(&session)
+            .cloned()
+            .ok_or_else(|| AppError::new("session.not_found", "SSH 会话不存在或已关闭"))
     }
 
     pub async fn write(&self, session: SessionId, bytes: Vec<u8>) -> AppResult<()> {
@@ -108,7 +221,7 @@ impl SshManager {
 async fn run_session(
     manager: SshManager,
     session_id: SessionId,
-    mut connected: ConnectedSsh,
+    connected: Option<ConnectedSsh>,
     mut channel: Channel<Msg>,
     mut rx: mpsc::Receiver<TermInput>,
     on_event: TauriChannel<TermEvent>,
@@ -171,10 +284,14 @@ async fn run_session(
 
     flush(&mut buffer, &mut seq, &on_event);
     let _ = channel.eof().await;
-    let _ = connected
-        .handle
-        .disconnect(Disconnect::ByApplication, "", "en")
-        .await;
+    // 只有独立打开的会话才断开连接；复用父连接的 exec 会话不能断开整条 SSH。
+    if let Some(connected) = connected {
+        let _ = connected
+            .handle
+            .disconnect(Disconnect::ByApplication, "", "en")
+            .await;
+        manager.handles.lock().await.remove(&session_id);
+    }
     manager.sessions.lock().await.remove(&session_id);
     let _ = on_event.send(TermEvent::Exit {
         code: exit_code,

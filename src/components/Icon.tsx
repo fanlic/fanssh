@@ -30,7 +30,9 @@ export type IconName =
   | "copy"
   | "play"
   | "trash"
-  | "edit";
+  | "edit"
+  | "filter"
+  | "docker";
 
 const PATHS: Record<IconName, JSX.Element> = {
   term: (
@@ -127,6 +129,14 @@ const PATHS: Record<IconName, JSX.Element> = {
   play: <path d="M5 3l8 5-8 5V3z" />,
   trash: <path d="M3 4h10M6 4V3h4v1M4.5 4l.5 9h6l.5-9M6.5 7v3M9.5 7v3" />,
   edit: <path d="M3 13h2l7-7-2-2-7 7v2zM9 4l2 2" />,
+  filter: <path d="M2.5 3h11L9.5 7.5V12l-3 2V7.5L2.5 3z" />,
+  docker: (
+    <>
+      <path d="M2.5 6.5L8 4l5.5 2.5L8 9 2.5 6.5z" />
+      <path d="M2.5 6.5V11L8 13.5V9" />
+      <path d="M13.5 6.5V11L8 13.5" />
+    </>
+  ),
 };
 
 interface Props extends Omit<SVGProps<SVGSVGElement>, "name"> {

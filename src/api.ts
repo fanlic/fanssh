@@ -3,6 +3,8 @@ import type {
   AiSettingsInput,
   AiSettingsView,
   ChatMessage,
+  DockerContainer,
+  DockerLogs,
   Nl2CmdResult,
   Profile,
   RdpHandleDto,
@@ -27,6 +29,22 @@ export async function termOpen(
   const channel = new Channel<TermEvent>();
   channel.onmessage = onEvent;
   return invoke<string>("term_open", { profileId, onEvent: channel });
+}
+
+// ---------------------------------------------------------------------------
+// Docker（复用当前 SSH 会话，经 docker.sock 转发）
+// ---------------------------------------------------------------------------
+
+export async function dockerContainers(session: string): Promise<DockerContainer[]> {
+  return invoke<DockerContainer[]>("docker_containers", { session });
+}
+
+export async function dockerLogs(
+  session: string,
+  container: string,
+  tail = 500,
+): Promise<DockerLogs> {
+  return invoke<DockerLogs>("docker_logs", { session, container, tail });
 }
 
 export function termInput(session: string, data: Uint8Array): Promise<void> {

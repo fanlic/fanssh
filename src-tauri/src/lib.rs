@@ -1,6 +1,7 @@
 mod ai;
 mod app;
 mod crypto;
+mod docker;
 mod ipc;
 mod profile;
 mod serial;
@@ -31,6 +32,8 @@ pub fn run() {
             term_input,
             term_resize,
             term_close,
+            docker_containers,
+            docker_logs,
             serial_list_ports,
             serial_open,
             serial_input,

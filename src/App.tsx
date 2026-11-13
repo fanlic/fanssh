@@ -3,6 +3,7 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { errorText, profileExport, profileImport, rdpLaunch, updaterStatus } from "./api";
 import { AiSidebar } from "./components/AiSidebar";
 import { ActivityBar } from "./components/ActivityBar";
+import { DockerPanel } from "./components/DockerPanel";
 import { Icon } from "./components/Icon";
 import { PassphraseDialog } from "./components/PassphraseDialog";
 import { SessionDialog } from "./components/SessionDialog";
@@ -12,7 +13,7 @@ import { SftpPanel } from "./components/SftpPanel";
 import { TabBar } from "./components/TabBar";
 import { TerminalPane } from "./components/TerminalPane";
 import { useAppStore } from "./store";
-import type { Profile } from "./types";
+import type { DockerContainer, Profile } from "./types";
 
 interface Notice {
   message: string;
@@ -28,6 +29,7 @@ export default function App() {
   const toggleAi = useAppStore((s) => s.toggleAi);
   const loadProfiles = useAppStore((s) => s.loadProfiles);
   const openProfileInSplit = useAppStore((s) => s.openProfileInSplit);
+  const openProfileTab = useAppStore((s) => s.openProfileTab);
   const setSftpProfileId = useAppStore((s) => s.setSftpProfileId);
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -35,8 +37,9 @@ export default function App() {
   const [editing, setEditing] = useState<Profile | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [dockerOpen, setDockerOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [version, setVersion] = useState("1.0.4");
+  const [version, setVersion] = useState("1.0.5");
   const quickSearchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -132,7 +135,34 @@ export default function App() {
       notify("先打开一个 SSH 会话再使用 SFTP", "error");
       return;
     }
+    setDockerOpen(false);
     setSftpProfileId(activeProfile.id);
+  };
+
+  const handleDockerToggle = () => {
+    if (dockerOpen) {
+      setDockerOpen(false);
+      return;
+    }
+    setSftpProfileId(null);
+    setDockerOpen(true);
+  };
+
+  /** 进入容器：新开 SSH 终端 Tab，把命令写进输入行但不回车。 */
+  const handleDockerShell = (container: DockerContainer) => {
+    if (!activeProfile || activeProfile.protocol !== "ssh") {
+      notify("请先连接一个 Linux SSH 会话", "error");
+      return;
+    }
+    // 只接受十六进制容器 id（与后端白名单一致），不使用远端返回的名称拼命令。
+    if (!/^[0-9a-f]{12,64}$/i.test(container.id)) {
+      notify("容器标识异常，已取消插入命令", "error");
+      return;
+    }
+    openProfileTab(activeProfile, `docker exec -it ${container.id} bash`);
+    notify(
+      "已插入 docker exec 命令（未执行）。若容器内没有 bash，把末尾的 bash 改成 sh 后按 Enter。",
+    );
   };
 
   const [passDialog, setPassDialog] = useState<{ mode: "export" | "import"; path: string } | null>(
@@ -335,12 +365,26 @@ export default function App() {
               onClose={() => setSftpProfileId(null)}
             />
           )}
+
+          {dockerOpen && (
+            <DockerPanel
+              profile={activeProfile}
+              sessionId={
+                activeProfile?.protocol === "ssh" ? (activePane?.sessionId ?? null) : null
+              }
+              paneReady={activePane?.status === "ready"}
+              onClose={() => setDockerOpen(false)}
+              onOpenShell={handleDockerShell}
+            />
+          )}
         </main>
 
         <ActivityBar
           sftpOpen={sftpProfileId !== null}
+          dockerOpen={dockerOpen}
           aiOpen={aiOpen}
           onToggleSftp={handleSftpToggle}
+          onToggleDocker={handleDockerToggle}
           onToggleAi={toggleAi}
         />
 

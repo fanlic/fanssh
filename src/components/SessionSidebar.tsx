@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { errorText, profileDelete } from "../api";
 import { useAppStore } from "../store";
 import type { Profile } from "../types";
@@ -19,6 +19,7 @@ type ProtoFilter = "ssh" | "rdp" | "serial";
 
 const PROTO_LABEL: Record<ProtoFilter, string> = { ssh: "SSH", rdp: "RDP", serial: "串口" };
 const PROTO_TAG: Record<ProtoFilter, string> = { ssh: "SSH", rdp: "RDP", serial: "SER" };
+const ALL_PROTOS: ProtoFilter[] = ["ssh", "serial", "rdp"];
 
 export function SessionSidebar({
   onNew,
@@ -38,8 +39,60 @@ export function SessionSidebar({
   const setSftpProfileId = useAppStore((s) => s.setSftpProfileId);
   const loadProfiles = useAppStore((s) => s.loadProfiles);
 
-  const [proto, setProto] = useState<ProtoFilter>("ssh");
+  const [enabled, setEnabled] = useState<Record<ProtoFilter, boolean>>({
+    ssh: true,
+    serial: true,
+    rdp: true,
+  });
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const filterRef = useRef<HTMLDivElement | null>(null);
+  const ctxRef = useRef<HTMLDivElement | null>(null);
+
+  // 点击外部 / Esc 关闭协议筛选菜单
+  useEffect(() => {
+    if (!filterOpen) return;
+    const onDown = (event: MouseEvent) => {
+      if (filterRef.current && !filterRef.current.contains(event.target as Node)) {
+        setFilterOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFilterOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [filterOpen]);
+
+  // 点击外部 / Esc / 滚动 / 窗口变化时关闭右键菜单
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const close = () => setCtxMenu(null);
+    const onDown = (event: MouseEvent) => {
+      if (ctxRef.current && ctxRef.current.contains(event.target as Node)) return;
+      close();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    window.addEventListener("blur", close);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("blur", close);
+    };
+  }, [ctxMenu]);
 
   const keyword = query.trim().toLowerCase();
   const matches = useMemo(
@@ -77,8 +130,15 @@ export function SessionSidebar({
     [matches],
   );
 
+  const selectedProtos = ALL_PROTOS.filter((item) => enabled[item]);
+  const allSelected = selectedProtos.length === ALL_PROTOS.length;
+
+  const visible = useMemo(
+    () => matches.filter((profile) => enabled[profile.protocol]),
+    [matches, enabled],
+  );
+
   const groups = useMemo(() => {
-    const visible = matches.filter((profile) => profile.protocol === proto);
     const map = new Map<string, Profile[]>();
     for (const profile of visible) {
       const key = profile.group?.trim() || "未分组";
@@ -87,7 +147,7 @@ export function SessionSidebar({
       map.set(key, list);
     }
     return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [matches, proto]);
+  }, [visible]);
 
   const activeProfileIds = useMemo(
     () => new Set(tabs.flatMap((tab) => tab.panes.map((pane) => pane.profileId))),
@@ -113,18 +173,44 @@ export function SessionSidebar({
     }
   };
 
-  const visibleCount = groups.reduce((sum, [, list]) => sum + list.length, 0);
-  const emptyVariant: "none" | "search" | "protocol" | null =
+  const toggleProto = (item: ProtoFilter) => {
+    setEnabled((prev) => {
+      const next = { ...prev, [item]: !prev[item] };
+      // 至少保留一个协议，禁止取消最后一项
+      if (!ALL_PROTOS.some((key) => next[key])) return prev;
+      return next;
+    });
+  };
+
+  const selectAll = () => setEnabled({ ssh: true, serial: true, rdp: true });
+
+  const openContextMenu = (event: ReactMouseEvent) => {
+    event.preventDefault();
+    // 协议筛选菜单内部右键不重复弹菜单
+    if (filterRef.current?.contains(event.target as Node)) return;
+    const width = 188;
+    const height = 116;
+    setCtxMenu({
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8)),
+    });
+  };
+
+  const visibleCount = visible.length;
+  const filterLabel = `${allSelected ? "全部" : selectedProtos.map((item) => PROTO_LABEL[item]).join(" + ")} · ${visibleCount}`;
+  const emptyVariant: "none" | "search" | "hidden" | null =
     profiles.length === 0
       ? "none"
       : visibleCount > 0 || loading || error
         ? null
         : keyword
-          ? "search"
-          : "protocol";
+          ? matches.length > 0
+            ? "hidden"
+            : "search"
+          : "hidden";
 
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" onContextMenu={openContextMenu}>
       <div className="sb-head">
         <span className="sb-title">会话</span>
         <span className="sb-count">{profiles.length}</span>
@@ -235,43 +321,124 @@ export function SessionSidebar({
             </button>
           </div>
         )}
-        {emptyVariant === "protocol" && (
+        {emptyVariant === "hidden" && (
           <div className="sb-empty">
             <span className="empty-icon">
-              <Icon name="plus" size={18} />
+              <Icon name="filter" size={18} />
             </span>
-            <div className="empty-title">该协议下没有配置</div>
-            <div className="empty-desc">
-              当前没有 {PROTO_LABEL[proto]} 会话
+            <div className="empty-title">
+              {keyword ? "筛选隐藏了搜索结果" : "当前筛选已隐藏全部会话"}
             </div>
-            <button className="btn-ghost sm" onClick={onNew}>
-              新建 {PROTO_LABEL[proto]} 连接
+            <div className="empty-desc">
+              {keyword
+                ? `「${query.trim()}」匹配的会话都在未勾选的协议里`
+                : "勾选更多协议，或直接显示全部协议"}
+            </div>
+            <button className="btn-ghost sm" onClick={selectAll}>
+              显示全部协议
             </button>
           </div>
         )}
       </div>
 
-      <div className="sb-filter" role="tablist" aria-label="协议筛选">
-        <div className="proto-switch">
-          {(["ssh", "serial", "rdp"] as ProtoFilter[]).map((item) => (
-            <button
-              key={item}
-              role="tab"
-              aria-selected={proto === item}
-              className={`proto-tab${proto === item ? " is-active" : ""}`}
-              onClick={() => setProto(item)}
-            >
-              {PROTO_LABEL[item]}
-              <span className="pcount">{matchCount[item]}</span>
-            </button>
-          ))}
-        </div>
+      <div className="sb-filter" ref={filterRef}>
+        <button
+          className={`pf-btn${filterOpen ? " is-open" : ""}`}
+          aria-haspopup="menu"
+          aria-expanded={filterOpen}
+          title="按协议筛选会话"
+          onClick={() => setFilterOpen((open) => !open)}
+        >
+          <Icon name="filter" size={12} />
+          <span className="pf-label">{filterLabel}</span>
+          <Icon name="chev" size={11} className="pf-caret" />
+        </button>
+
+        {filterOpen && (
+          <div className="proto-menu" role="menu" aria-label="协议筛选">
+            <label className="pf-row">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                disabled={allSelected}
+                title={allSelected ? "已全选；至少保留一个协议" : "勾选全部协议"}
+                onChange={selectAll}
+              />
+              <span className="pf-name">全选</span>
+              <span className="pf-count">{matches.length}</span>
+            </label>
+            <div className="pf-sep" />
+            {ALL_PROTOS.map((item) => (
+              <label className="pf-row" key={item}>
+                <input
+                  type="checkbox"
+                  checked={enabled[item]}
+                  disabled={enabled[item] && selectedProtos.length === 1}
+                  title={
+                    enabled[item] && selectedProtos.length === 1
+                      ? "至少保留一个协议"
+                      : `显示 / 隐藏 ${PROTO_LABEL[item]} 会话`
+                  }
+                  onChange={() => toggleProto(item)}
+                />
+                <span className={`proto-tag ${item}`}>{PROTO_TAG[item]}</span>
+                <span className="pf-name">{PROTO_LABEL[item]}</span>
+                <span className="pf-count">{matchCount[item]}</span>
+              </label>
+            ))}
+            <div className="pf-note">至少保留一个协议；与顶部搜索取交集</div>
+          </div>
+        )}
       </div>
 
       <div className="sb-foot">
         <Icon name="lock" size={11} />
         <span>凭据已加密，与配置分开存储</span>
       </div>
+
+      {ctxMenu && (
+        <div
+          ref={ctxRef}
+          className="ctx-menu"
+          role="menu"
+          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <button
+            className="ctx-item"
+            role="menuitem"
+            onClick={() => {
+              setCtxMenu(null);
+              onNew();
+            }}
+          >
+            <Icon name="plus" size={13} />
+            新建连接
+          </button>
+          <button
+            className="ctx-item"
+            role="menuitem"
+            onClick={() => {
+              setCtxMenu(null);
+              onImport();
+            }}
+          >
+            <Icon name="import" size={13} />
+            导入配置…
+          </button>
+          <button
+            className="ctx-item"
+            role="menuitem"
+            onClick={() => {
+              setCtxMenu(null);
+              onExport();
+            }}
+          >
+            <Icon name="export" size={13} />
+            导出加密配置…
+          </button>
+        </div>
+      )}
     </aside>
   );
 }

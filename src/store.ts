@@ -10,6 +10,8 @@ export interface PaneState {
   sessionId: string | null;
   status: "connecting" | "ready" | "closed" | "error";
   statusText: string;
+  /** 会话就绪后写入远端输入行、不自动回车的文本（Docker 进入容器用）。 */
+  initialInput?: string;
 }
 
 /** 一个标签页可以容纳多个 pane，为分屏预留。 */
@@ -68,7 +70,7 @@ interface AppStore {
   aiOpen: boolean;
 
   loadProfiles: () => Promise<void>;
-  openProfileTab: (profile: Profile) => void;
+  openProfileTab: (profile: Profile, initialInput?: string) => void;
   openProfileInSplit: (tabId: string, profile: Profile) => void;
   closeTab: (tabId: string) => void;
   closePane: (tabId: string, paneKey: string) => void;
@@ -105,8 +107,9 @@ export const useAppStore = create<AppStore>()((set, get) => ({
     }
   },
 
-  openProfileTab: (profile) => {
+  openProfileTab: (profile, initialInput) => {
     const pane = newPane(profile);
+    if (initialInput) pane.initialInput = initialInput;
     const tab: TabState = {
       id: `tab-${Date.now().toString(36)}-${paneSeq}`,
       title: profile.name,

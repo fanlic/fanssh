@@ -7,6 +7,7 @@ use uuid::Uuid;
 use crate::ai;
 use crate::app::settings::AiSettingsFile;
 use crate::app::AppState;
+use crate::docker::{self, DockerContainer, DockerLogs};
 use crate::ipc::dto::{
     AiChatRequest, AiSettingsInput, AiSettingsView, Nl2CmdResult, RdpHandleDto, RemoteEntry,
     SerialPortInfo, SftpOpenResp, TermEvent, TransferEvent, UpdateEvent, UpdateInfoDto,
@@ -67,6 +68,28 @@ pub async fn term_resize(
 #[tauri::command]
 pub async fn term_close(state: State<'_, AppState>, session: SessionId) -> AppResult<()> {
     state.ssh.close(session).await
+}
+
+// ---------------------------------------------------------------------------
+// Docker（复用当前 SSH 连接，经 docker.sock 转发）
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn docker_containers(
+    state: State<'_, AppState>,
+    session: SessionId,
+) -> AppResult<Vec<DockerContainer>> {
+    docker::containers(&state.ssh, session).await
+}
+
+#[tauri::command]
+pub async fn docker_logs(
+    state: State<'_, AppState>,
+    session: SessionId,
+    container: String,
+    tail: Option<u32>,
+) -> AppResult<DockerLogs> {
+    docker::logs(&state.ssh, session, &container, tail.unwrap_or(500)).await
 }
 
 // ---------------------------------------------------------------------------

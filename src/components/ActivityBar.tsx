@@ -2,13 +2,22 @@ import { Icon } from "./Icon";
 
 interface Props {
   sftpOpen: boolean;
+  dockerOpen: boolean;
   aiOpen: boolean;
   onToggleSftp: () => void;
+  onToggleDocker: () => void;
   onToggleAi: () => void;
 }
 
 /** 终端区与 AI 面板之间的活动栏。 */
-export function ActivityBar({ sftpOpen, aiOpen, onToggleSftp, onToggleAi }: Props) {
+export function ActivityBar({
+  sftpOpen,
+  dockerOpen,
+  aiOpen,
+  onToggleSftp,
+  onToggleDocker,
+  onToggleAi,
+}: Props) {
   return (
     <nav className="activitybar" aria-label="活动栏">
       <button
@@ -18,6 +27,14 @@ export function ActivityBar({ sftpOpen, aiOpen, onToggleSftp, onToggleAi }: Prop
         onClick={onToggleSftp}
       >
         <Icon name="folder" size={17} />
+      </button>
+      <button
+        className={`ab-btn${dockerOpen ? " is-active" : ""}`}
+        title={dockerOpen ? "关闭 Docker" : "打开 Docker"}
+        aria-pressed={dockerOpen}
+        onClick={onToggleDocker}
+      >
+        <Icon name="docker" size={17} />
       </button>
       <button
         className={`ab-btn${aiOpen ? " is-active" : ""}`}
