@@ -19,21 +19,23 @@ interface Props {
   onCollapse?: () => void;
 }
 
-type ProtoFilter = "ssh" | "rdp" | "serial" | "tunnel";
+type ProtoFilter = "ssh" | "rdp" | "serial" | "telnet" | "tunnel";
 
 const PROTO_LABEL: Record<ProtoFilter, string> = {
   ssh: "SSH",
   rdp: "RDP",
   serial: "串口",
+  telnet: "Telnet",
   tunnel: "隧道",
 };
 const PROTO_TAG: Record<ProtoFilter, string> = {
   ssh: "SSH",
   rdp: "RDP",
   serial: "SER",
+  telnet: "TEL",
   tunnel: "TUN",
 };
-const ALL_PROTOS: ProtoFilter[] = ["ssh", "serial", "rdp", "tunnel"];
+const ALL_PROTOS: ProtoFilter[] = ["ssh", "serial", "rdp", "telnet", "tunnel"];
 
 export function SessionSidebar({
   onNew,
@@ -60,6 +62,7 @@ export function SessionSidebar({
     ssh: true,
     serial: true,
     rdp: true,
+    telnet: true,
     tunnel: true,
   });
   // 顶部协议 tab 切换时，把侧栏过滤同步为单协议；底部勾选菜单仍可再改。
@@ -69,6 +72,7 @@ export function SessionSidebar({
       ssh: proto === "ssh",
       serial: proto === "serial",
       rdp: proto === "rdp",
+      telnet: proto === "telnet",
       tunnel: proto === "tunnel",
     });
   }, [proto]);
@@ -138,7 +142,9 @@ export function SessionSidebar({
               ? "串口 serial"
               : profile.protocol === "tunnel"
                 ? "隧道 tunnel 端口转发"
-                : "ssh"
+                : profile.protocol === "telnet"
+                  ? "telnet 明文"
+                  : "ssh"
           ).includes(keyword) ||
           (profile.protocol === "tunnel"
             ? `${profile.options.tunnel?.routes.length ?? 0} 条路由`
@@ -161,6 +167,7 @@ export function SessionSidebar({
       ssh: matches.filter((profile) => profile.protocol === "ssh").length,
       rdp: matches.filter((profile) => profile.protocol === "rdp").length,
       serial: matches.filter((profile) => profile.protocol === "serial").length,
+      telnet: matches.filter((profile) => profile.protocol === "telnet").length,
       tunnel: matches.filter((profile) => profile.protocol === "tunnel").length,
     }),
     [matches],
@@ -220,7 +227,8 @@ export function SessionSidebar({
     });
   };
 
-  const selectAll = () => setEnabled({ ssh: true, serial: true, rdp: true, tunnel: true });
+  const selectAll = () =>
+    setEnabled({ ssh: true, serial: true, rdp: true, telnet: true, tunnel: true });
 
   const openContextMenu = (event: ReactMouseEvent) => {
     event.preventDefault();
@@ -368,7 +376,7 @@ export function SessionSidebar({
               <Icon name="folder" size={18} />
             </span>
             <div className="empty-title">还没有服务器配置</div>
-            <div className="empty-desc">添加第一台 SSH / 串口 / RDP 设备后即可双击连接</div>
+            <div className="empty-desc">添加第一台 SSH / Telnet / 串口 / RDP / 隧道 配置后即可双击连接</div>
             <button className="btn-primary sm" onClick={onNew}>
               新建连接
             </button>

@@ -10,6 +10,9 @@ import {
   serialInput,
   serialOpen,
   serialSetLines,
+  telnetClose,
+  telnetInput,
+  telnetOpen,
   termAuthRespond,
   termClose,
   termInput,
@@ -101,6 +104,7 @@ export function TerminalPane({ tabId, pane, active }: Props) {
   const closePane = useAppStore((s) => s.closePane);
   const profile = useAppStore((s) => s.profiles.find((item) => item.id === pane.profileId));
   const isSerial = profile?.protocol === "serial";
+  const isTelnet = profile?.protocol === "telnet";
   const isSsh = profile?.protocol === "ssh";
   const serialPrefs = profile?.options.serial ?? null;
   // 串口控制线状态；连接后可在面板顶部实时切换。
@@ -144,8 +148,8 @@ export function TerminalPane({ tabId, pane, active }: Props) {
       } catch {
         // 容器尚未布局完成时忽略
       }
-      // 串口没有 PTY 尺寸概念，不做远端 resize
-      if (sessionRef.current && !isSerial) {
+      // 串口没有 PTY 尺寸概念，Telnet 也不上报窗口大小，不做远端 resize
+      if (sessionRef.current && !isSerial && !isTelnet) {
         termResize(sessionRef.current, term.cols, term.rows).catch(() => undefined);
       }
     };
@@ -408,6 +412,14 @@ export function TerminalPane({ tabId, pane, active }: Props) {
     };
 
     let seedTimer: number | undefined;
+    const closeSession = (session: string) => {
+      const request = isSerial
+        ? serialClose(session)
+        : isTelnet
+          ? telnetClose(session)
+          : termClose(session);
+      request.catch(() => undefined);
+    };
     const dataSub = term.onData((data) => {
       const session = sessionRef.current;
       if (isSerial) {
@@ -417,6 +429,14 @@ export function TerminalPane({ tabId, pane, active }: Props) {
         if (session) {
           serialInput(session, bytes).catch((error) => {
             term.writeln(`\r\n\x1b[31m写入串口失败: ${errorText(error)}\x1b[0m`);
+          });
+        }
+        return;
+      }
+      if (isTelnet) {
+        if (session) {
+          telnetInput(session, new TextEncoder().encode(data)).catch((error) => {
+            term.writeln(`\r\n\x1b[31m写入 Telnet 失败: ${errorText(error)}\x1b[0m`);
           });
         }
         return;
@@ -439,7 +459,7 @@ export function TerminalPane({ tabId, pane, active }: Props) {
       const previous = sessionRef.current;
       if (previous) {
         sessionRef.current = null;
-        (isSerial ? serialClose(previous) : termClose(previous)).catch(() => undefined);
+        closeSession(previous);
       }
       setPaneStatus(tabId, pane.key, "connecting", "连接中…");
       const onEvent = (event: TermEvent) => {
@@ -496,13 +516,15 @@ export function TerminalPane({ tabId, pane, active }: Props) {
       try {
         const session = isSerial
           ? await serialOpen(pane.profileId, onEvent)
-          : await termOpen(pane.profileId, onEvent);
+          : isTelnet
+            ? await telnetOpen(pane.profileId, onEvent)
+            : await termOpen(pane.profileId, onEvent);
         if (disposedRef.current) {
-          (isSerial ? serialClose(session) : termClose(session)).catch(() => undefined);
+          closeSession(session);
           return;
         }
         if (current !== generation) {
-          (isSerial ? serialClose(session) : termClose(session)).catch(() => undefined);
+          closeSession(session);
           return;
         }
         sessionRef.current = session;
@@ -551,7 +573,7 @@ export function TerminalPane({ tabId, pane, active }: Props) {
       const session = sessionRef.current;
       sessionRef.current = null;
       if (session) {
-        (isSerial ? serialClose(session) : termClose(session)).catch(() => undefined);
+        closeSession(session);
       }
       terminalRegistry.unregister(pane.key);
       term.dispose();
@@ -726,7 +748,13 @@ export function TerminalPane({ tabId, pane, active }: Props) {
     >
       <div className="pane-head">
         <span className={`proto-tag ${profile?.protocol ?? "ssh"}`}>
-          {profile?.protocol === "rdp" ? "RDP" : profile?.protocol === "serial" ? "SER" : "SSH"}
+          {profile?.protocol === "rdp"
+            ? "RDP"
+            : profile?.protocol === "serial"
+              ? "SER"
+              : profile?.protocol === "telnet"
+                ? "TEL"
+                : "SSH"}
         </span>
         <span className="pane-name">{pane.profileName}</span>
         {isSerial && (

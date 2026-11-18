@@ -224,6 +224,27 @@ export function aiNl2Cmd(prompt: string, context: string | null): Promise<Nl2Cmd
 }
 
 // ---------------------------------------------------------------------------
+// Telnet
+// ---------------------------------------------------------------------------
+
+export async function telnetOpen(
+  profileId: string,
+  onEvent: (event: TermEvent) => void,
+): Promise<string> {
+  const channel = new Channel<TermEvent>();
+  channel.onmessage = onEvent;
+  return invoke("telnet_open", { profileId, onEvent: channel });
+}
+
+export function telnetInput(session: string, bytes: Uint8Array): Promise<void> {
+  return invoke("telnet_input", { session, bytes: Array.from(bytes) });
+}
+
+export function telnetClose(session: string): Promise<void> {
+  return invoke("telnet_close", { session });
+}
+
+// ---------------------------------------------------------------------------
 // 端口转发 / 隧道
 // ---------------------------------------------------------------------------
 

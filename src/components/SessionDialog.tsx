@@ -18,6 +18,7 @@ import type {
   SerialPortInfo,
   SerialPrefs,
   SshPrefs,
+  TelnetPrefs,
   TunnelKind,
   TunnelPrefs,
   TunnelRoute,
@@ -65,6 +66,7 @@ interface FormState {
   ssh: SshPrefs;
   rdp: RdpPrefs;
   serial: SerialPrefs;
+  telnet: TelnetPrefs;
   tunnel: TunnelPrefs;
 }
 
@@ -149,6 +151,11 @@ const DEFAULT_TUNNEL: TunnelPrefs = {
   routes: [],
 };
 
+const DEFAULT_TELNET: TelnetPrefs = {
+  enable_mapping: false,
+  mapping_preset: "standard",
+};
+
 const EMPTY: FormState = {
   name: "",
   group: "",
@@ -176,6 +183,7 @@ const EMPTY: FormState = {
     domain: "",
   },
   serial: { ...DEFAULT_SERIAL },
+  telnet: { ...DEFAULT_TELNET },
   tunnel: { ...DEFAULT_TUNNEL, routes: [] },
 };
 
@@ -212,6 +220,7 @@ function toForm(profile: Profile | null, defaultProtocol: Protocol = "ssh"): For
       protocol: defaultProtocol,
       rdp: { ...EMPTY.rdp },
       serial: { ...DEFAULT_SERIAL },
+      telnet: { ...DEFAULT_TELNET },
       tunnel: { ...DEFAULT_TUNNEL, routes: [] },
     };
   }
@@ -258,6 +267,7 @@ function toForm(profile: Profile | null, defaultProtocol: Protocol = "ssh"): For
     ssh: { ...DEFAULT_SSH, ...(profile.options.ssh ?? {}) },
     rdp: { ...EMPTY.rdp, ...(profile.options.rdp ?? {}) },
     serial,
+    telnet: { ...DEFAULT_TELNET, ...(profile.options.telnet ?? {}) },
     tunnel,
   };
 }
@@ -546,6 +556,39 @@ export function SessionDialog({
             },
           },
         };
+      } else if (form.protocol === "telnet") {
+        if (!form.host.trim()) throw new Error("请填写 Telnet 地址");
+        const port = Number(form.port);
+        if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error("端口不合法");
+        let auth: AuthRef = { kind: "none" };
+        if (form.password.trim()) {
+          const existing = initial?.auth.kind === "password" ? initial.auth.secret : null;
+          const id = await vaultPut(
+            existing,
+            "password",
+            `${form.name.trim()} Telnet 密码`,
+            form.password,
+          );
+          auth = { kind: "password", secret: id };
+        } else if (initial?.auth.kind === "password") {
+          auth = initial.auth;
+        }
+        profile = {
+          id: initial?.id ?? crypto.randomUUID(),
+          name: form.name.trim(),
+          group: form.group.trim() || null,
+          remark: form.remark.trim() || null,
+          protocol: "telnet",
+          target: {
+            host: form.host.trim(),
+            port,
+            user: form.user.trim(),
+          },
+          auth,
+          jump: [],
+          tags,
+          options: { telnet: { ...form.telnet } },
+        };
       } else if (form.protocol === "serial") {
         // 串口配置与凭据无关，不触碰 vault。
         const serial: SerialPrefs = {
@@ -667,7 +710,12 @@ export function SessionDialog({
           { id: "sec-basic", label: "基本信息", icon: "info" },
           { id: "sec-serial", label: "串口参数", icon: "plug" },
         ]
-      : form.protocol === "rdp"
+      : form.protocol === "telnet"
+        ? [
+            { id: "sec-basic", label: "基本信息", icon: "info" },
+            { id: "sec-telnet-mapping", label: "按键映射", icon: "term" },
+          ]
+        : form.protocol === "rdp"
         ? [
             { id: "sec-basic", label: "基本信息", icon: "info" },
             { id: "sec-rdp-auth", label: "登录凭据", icon: "lock" },
@@ -747,6 +795,17 @@ export function SessionDialog({
             )}
             <button
               role="tab"
+              aria-selected={form.protocol === "telnet"}
+              className={form.protocol === "telnet" ? "is-active" : ""}
+              onClick={() => {
+                update("protocol", "telnet");
+                if (form.port === "22" || form.port === "3389") update("port", "23");
+              }}
+            >
+              Telnet
+            </button>
+            <button
+              role="tab"
               aria-selected={form.protocol === "tunnel"}
               className={form.protocol === "tunnel" ? "is-active" : ""}
               onClick={() => update("protocol", "tunnel")}
@@ -792,6 +851,35 @@ export function SessionDialog({
                   value={form.user}
                   onChange={(e) => update("user", e.target.value)}
                   placeholder={form.protocol === "rdp" ? "Administrator" : "root"}
+                />
+              </label>
+            </div>
+          )}
+
+          {form.protocol === "telnet" && (
+            <div className="form-grid">
+              <label className="span-2">
+                密码
+                <input
+                  type="password"
+                  value={form.password}
+                  onChange={(e) => update("password", e.target.value)}
+                  placeholder={
+                    initial?.auth.kind === "password" ? "留空沿用已保存的密码" : "可选，连接后自动填写"
+                  }
+                />
+              </label>
+              <p className="update-hint span-2">
+                Telnet 是明文协议：用户名、密码和全部会话数据都会以明文在网络上传输，仅在可信网络中使用。
+                凭据仍保存在本地加密凭据库中。
+              </p>
+              <label className="span-2">
+                备注
+                <textarea
+                  rows={2}
+                  value={form.remark}
+                  onChange={(e) => update("remark", e.target.value)}
+                  placeholder="用途、负责人等"
                 />
               </label>
             </div>
@@ -1608,6 +1696,42 @@ export function SessionDialog({
               {form.tunnel.routes.length === 0 && (
                 <p className="muted">至少添加一条路由并保存后，才能在隧道面板中启动。</p>
               )}
+            </div>
+          )}
+
+          {form.protocol === "telnet" && (
+            <div id="sec-telnet-mapping">
+              <div className="section-title">按键映射</div>
+              <div className="form-grid">
+                <label className="inline span-2">
+                  <input
+                    type="checkbox"
+                    checked={form.telnet.enable_mapping}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        telnet: { ...prev.telnet, enable_mapping: e.target.checked },
+                      }))
+                    }
+                  />
+                  启用映射
+                </label>
+                <label className="span-2">
+                  预设模板
+                  <select
+                    value={form.telnet.mapping_preset}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        telnet: { ...prev.telnet, mapping_preset: e.target.value },
+                      }))
+                    }
+                  >
+                    <option value="standard">标准模式 - 默认按键映射，不进行任何转换</option>
+                  </select>
+                  <span className="muted">标准模式按键原样发送；启用映射不会改变当前行为。</span>
+                </label>
+              </div>
             </div>
           )}
 

@@ -182,7 +182,16 @@ export default function App() {
   );
 
   const notify = (message: string, kind: "info" | "error" = "info") => setNotice({ message, kind });
-  const protoLabel = proto === "ssh" ? "SSH" : proto === "serial" ? "串口" : proto === "tunnel" ? "隧道" : "RDP";
+  const protoLabel =
+    proto === "ssh"
+      ? "SSH"
+      : proto === "serial"
+        ? "串口"
+        : proto === "tunnel"
+          ? "隧道"
+          : proto === "telnet"
+            ? "Telnet"
+            : "RDP";
 
   const handleNew = () => {
     setEditing(null);
@@ -385,7 +394,7 @@ export default function App() {
 
       <div className="protobar">
         <div className="proto-tabs" role="tablist">
-          {(["ssh", "serial", "rdp", "tunnel"] as Protocol[])
+          {(["ssh", "serial", "rdp", "telnet", "tunnel"] as Protocol[])
             .filter((item) => item !== "rdp" || platform === "windows")
             .map((item) => (
               <button
@@ -398,7 +407,15 @@ export default function App() {
                   setSidebarOpen(true);
                 }}
               >
-                {item === "ssh" ? "SSH" : item === "serial" ? "串口" : item === "tunnel" ? "隧道" : "RDP"}
+                {item === "ssh"
+                  ? "SSH"
+                  : item === "serial"
+                    ? "串口"
+                    : item === "tunnel"
+                      ? "隧道"
+                      : item === "telnet"
+                        ? "Telnet"
+                        : "RDP"}
               </button>
             ))}
         </div>

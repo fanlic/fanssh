@@ -24,6 +24,7 @@ pub enum Protocol {
     Ssh,
     Rdp,
     Serial,
+    Telnet,
     Tunnel,
 }
 
@@ -390,6 +391,28 @@ impl Default for TunnelPrefs {
     }
 }
 
+/// Telnet 扩展参数。标准模式不做任何按键转换。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TelnetPrefs {
+    #[serde(default)]
+    pub enable_mapping: bool,
+    #[serde(default = "default_telnet_preset")]
+    pub mapping_preset: String,
+}
+
+fn default_telnet_preset() -> String {
+    "standard".to_string()
+}
+
+impl Default for TelnetPrefs {
+    fn default() -> Self {
+        Self {
+            enable_mapping: false,
+            mapping_preset: default_telnet_preset(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ProfileOptions {
     #[serde(default)]
@@ -398,6 +421,8 @@ pub struct ProfileOptions {
     pub serial: Option<SerialPrefs>,
     #[serde(default)]
     pub ssh: Option<SshPrefs>,
+    #[serde(default)]
+    pub telnet: Option<TelnetPrefs>,
     #[serde(default)]
     pub tunnel: Option<TunnelPrefs>,
 }
@@ -448,6 +473,11 @@ impl Profile {
     /// 隧道参数；未配置时回落到默认值。
     pub fn tunnel_prefs(&self) -> TunnelPrefs {
         self.options.tunnel.clone().unwrap_or_default()
+    }
+
+    /// Telnet 参数；未配置时回落到默认值。
+    pub fn telnet_prefs(&self) -> TelnetPrefs {
+        self.options.telnet.clone().unwrap_or_default()
     }
 }
 

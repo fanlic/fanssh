@@ -172,6 +172,44 @@ pub async fn serial_close(state: State<'_, AppState>, session: SessionId) -> App
 }
 
 // ---------------------------------------------------------------------------
+// Telnet
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn telnet_open(
+    state: State<'_, AppState>,
+    profile_id: Uuid,
+    on_event: TauriChannel<TermEvent>,
+) -> AppResult<SessionId> {
+    let profile = state
+        .profiles
+        .get(&profile_id)
+        .ok_or_else(|| AppError::new("profile.not_found", "服务器配置不存在"))?;
+    if !matches!(profile.protocol, Protocol::Telnet) {
+        return Err(AppError::new(
+            "telnet.invalid_profile",
+            "该配置不是 Telnet 协议，无法打开终端",
+        ));
+    }
+    let vault = state.vault.clone();
+    state.telnet.open(profile, vault, on_event).await
+}
+
+#[tauri::command]
+pub async fn telnet_input(
+    state: State<'_, AppState>,
+    session: SessionId,
+    bytes: Vec<u8>,
+) -> AppResult<()> {
+    state.telnet.write(session, bytes).await
+}
+
+#[tauri::command]
+pub async fn telnet_close(state: State<'_, AppState>, session: SessionId) -> AppResult<()> {
+    state.telnet.close(session).await
+}
+
+// ---------------------------------------------------------------------------
 // 服务器配置
 // ---------------------------------------------------------------------------
 

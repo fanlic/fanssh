@@ -1,6 +1,6 @@
 // 与 Rust 侧 serde 模型保持一致的类型定义。
 
-export type Protocol = "ssh" | "rdp" | "serial" | "tunnel";
+export type Protocol = "ssh" | "rdp" | "serial" | "telnet" | "tunnel";
 export type SecretKind = "password" | "private_key" | "passphrase" | "token";
 
 export interface Target {
@@ -84,7 +84,14 @@ export interface ProfileOptions {
   rdp?: RdpPrefs | null;
   serial?: SerialPrefs | null;
   ssh?: SshPrefs | null;
+  telnet?: TelnetPrefs | null;
   tunnel?: TunnelPrefs | null;
+}
+
+/** Telnet 按键映射；标准模式不做任何转换。 */
+export interface TelnetPrefs {
+  enable_mapping: boolean;
+  mapping_preset: string;
 }
 
 export type TunnelKind = "local" | "remote" | "dynamic";
