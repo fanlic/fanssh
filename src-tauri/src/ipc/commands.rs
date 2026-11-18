@@ -70,6 +70,32 @@ pub async fn term_close(state: State<'_, AppState>, session: SessionId) -> AppRe
     state.ssh.close(session).await
 }
 
+/// 键盘交互认证：提交用户输入；responses 为 None 表示用户取消。
+#[tauri::command]
+pub async fn term_auth_respond(
+    state: State<'_, AppState>,
+    prompt_id: Uuid,
+    responses: Option<Vec<String>>,
+) -> AppResult<()> {
+    state.ssh.respond_auth(prompt_id, responses).await
+}
+
+/// 读取用户通过文件对话框选择的本地私钥。限制大小，避免误选大文件。
+#[tauri::command]
+pub async fn read_text_file(path: String) -> AppResult<String> {
+    let path = PathBuf::from(path);
+    let meta = std::fs::metadata(&path)
+        .map_err(|e| AppError::new("file.read_failed", format!("读取文件失败：{e}")))?;
+    if !meta.is_file() {
+        return Err(AppError::new("file.not_file", "所选路径不是文件"));
+    }
+    if meta.len() > 2 * 1024 * 1024 {
+        return Err(AppError::new("file.too_large", "文件超过 2 MB，已拒绝读取"));
+    }
+    std::fs::read_to_string(&path)
+        .map_err(|e| AppError::new("file.read_failed", format!("读取文件失败：{e}")))
+}
+
 // ---------------------------------------------------------------------------
 // Docker（复用当前 SSH 连接，经 docker.sock 转发）
 // ---------------------------------------------------------------------------

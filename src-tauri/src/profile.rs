@@ -465,6 +465,7 @@ fn remap_auth(auth: &mut AuthRef, map: &HashMap<Uuid, Uuid>, vault: &Vault) {
                 None => AuthRef::None,
             }
         }
+        AuthRef::KeyboardInteractive => AuthRef::KeyboardInteractive,
         AuthRef::None => AuthRef::None,
     };
     *auth = next;
@@ -510,12 +511,31 @@ fn validate(profile: &Profile) -> Result<()> {
             }
         }
     }
-    if profile.jump.len() > 1 {
-        bail!("当前版本最多支持一层跳板机");
+    if profile.jump.len() > 8 {
+        bail!("跳板机链路最多 8 层");
     }
-    if let Some(hop) = profile.jump.first() {
+    for (index, hop) in profile.jump.iter().enumerate() {
         if hop.target.host.trim().is_empty() || hop.target.user.trim().is_empty() {
-            bail!("跳板机的主机和用户名不能为空");
+            bail!("第 {} 层跳板机的主机和用户名不能为空", index + 1);
+        }
+        if hop.target.port == 0 {
+            bail!("第 {} 层跳板机的端口不合法", index + 1);
+        }
+    }
+    if profile.protocol == Protocol::Ssh {
+        let prefs = profile.ssh_prefs();
+        if prefs.timeout_ms < 1000 {
+            bail!("超时时间不能小于 1000 毫秒");
+        }
+        if let Some(proxy) = prefs.proxy.as_deref() {
+            let proxy = proxy.trim();
+            if !proxy.is_empty()
+                && !proxy.starts_with("socks5://")
+                && !proxy.starts_with("socks5h://")
+                && !proxy.starts_with("http://")
+            {
+                bail!("代理地址只支持 socks5:// 或 http://");
+            }
         }
     }
     Ok(())

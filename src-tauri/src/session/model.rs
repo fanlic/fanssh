@@ -59,6 +59,8 @@ pub struct Target {
 pub enum AuthRef {
     Password { secret: Uuid },
     Key { key: Uuid, passphrase: Option<Uuid> },
+    /// SSH 键盘交互认证：每轮提示都由用户在连接时输入，不落盘。
+    KeyboardInteractive,
     None,
 }
 
@@ -73,6 +75,7 @@ impl AuthRef {
                 }
                 v
             }
+            Self::KeyboardInteractive => vec![],
             Self::None => vec![],
         }
     }
@@ -232,12 +235,116 @@ impl Default for SerialPrefs {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EnvVar {
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    pub value: String,
+}
+
+/// SSH 连接扩展参数。全部随 profile 持久化，不含明文凭据。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SshPrefs {
+    /// 建立 TCP 连接的超时（毫秒），默认 20000。
+    #[serde(default = "default_timeout_ms")]
+    pub timeout_ms: u64,
+    /// 心跳间隔（毫秒），0 表示关闭，默认 5000。
+    #[serde(default = "default_keepalive_ms")]
+    pub keepalive_ms: u64,
+    /// 终端显示编码：utf-8 / gbk / gb18030 / big5，默认 utf-8。
+    #[serde(default)]
+    pub encoding: Option<String>,
+    /// PTY 终端类型，留空使用 xterm-256color。
+    #[serde(default)]
+    pub terminal_type: Option<String>,
+    /// socks5:// 或 http:// 代理地址；留空直连。
+    #[serde(default)]
+    pub proxy: Option<String>,
+    /// 关闭代理（优先于 proxy 字段）。
+    #[serde(default)]
+    pub proxy_disabled: bool,
+    /// 登录后自动执行的初始化命令。
+    #[serde(default)]
+    pub init_command: Option<String>,
+    /// 登录后自动切换的默认路径。
+    #[serde(default)]
+    pub default_path: Option<String>,
+    /// 定时发送的保活命令。
+    #[serde(default)]
+    pub keepalive_command: Option<String>,
+    /// 保活命令发送周期（毫秒），默认 60000。
+    #[serde(default = "default_keepalive_command_ms")]
+    pub keepalive_command_ms: u64,
+    /// 会话环境变量，登录后通过 SSH set_env 下发。
+    #[serde(default)]
+    pub env: Vec<EnvVar>,
+    /// 禁止列表监控开启（当前仅保存）。
+    #[serde(default)]
+    pub monitor_disabled: bool,
+    /// 禁用 pwd 自动跳转（当前仅保存）。
+    #[serde(default)]
+    pub disable_pwd_jump: bool,
+    /// 启用 X11 转发（当前仅保存）。
+    #[serde(default)]
+    pub x11: bool,
+    /// X11 Cookie 模式（当前仅保存）。
+    #[serde(default)]
+    pub x11_cookie: Option<String>,
+    /// 主机密钥算法（当前仅保存）。
+    #[serde(default)]
+    pub host_key_algorithms: Option<String>,
+    /// Cipher 算法（当前仅保存）。
+    #[serde(default)]
+    pub ciphers: Option<String>,
+    /// 密钥交换算法（当前仅保存）。
+    #[serde(default)]
+    pub kex_algorithms: Option<String>,
+}
+
+fn default_timeout_ms() -> u64 {
+    20_000
+}
+fn default_keepalive_ms() -> u64 {
+    5_000
+}
+fn default_keepalive_command_ms() -> u64 {
+    60_000
+}
+
+impl Default for SshPrefs {
+    fn default() -> Self {
+        Self {
+            timeout_ms: default_timeout_ms(),
+            keepalive_ms: default_keepalive_ms(),
+            encoding: None,
+            terminal_type: None,
+            proxy: None,
+            proxy_disabled: false,
+            init_command: None,
+            default_path: None,
+            keepalive_command: None,
+            keepalive_command_ms: default_keepalive_command_ms(),
+            env: Vec::new(),
+            monitor_disabled: false,
+            disable_pwd_jump: false,
+            x11: false,
+            x11_cookie: None,
+            host_key_algorithms: None,
+            ciphers: None,
+            kex_algorithms: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ProfileOptions {
     #[serde(default)]
     pub rdp: Option<RdpPrefs>,
     #[serde(default)]
     pub serial: Option<SerialPrefs>,
+    #[serde(default)]
+    pub ssh: Option<SshPrefs>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -246,6 +353,9 @@ pub struct Profile {
     pub name: String,
     #[serde(default)]
     pub group: Option<String>,
+    /// 主机备注，对应参考文档「主机备注」。
+    #[serde(default)]
+    pub remark: Option<String>,
     pub protocol: Protocol,
     pub target: Target,
     pub auth: AuthRef,
@@ -273,6 +383,11 @@ impl Profile {
     /// 串口参数；未配置时回落到默认值（115200 8N1，无流控）。
     pub fn serial_prefs(&self) -> SerialPrefs {
         self.options.serial.clone().unwrap_or_default()
+    }
+
+    /// SSH 扩展参数；未配置时回落到默认值。
+    pub fn ssh_prefs(&self) -> SshPrefs {
+        self.options.ssh.clone().unwrap_or_default()
     }
 }
 

@@ -32,6 +32,8 @@ pub fn run() {
             term_input,
             term_resize,
             term_close,
+            term_auth_respond,
+            read_text_file,
             docker_containers,
             docker_logs,
             serial_list_ports,

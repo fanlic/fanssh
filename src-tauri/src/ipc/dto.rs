@@ -34,6 +34,19 @@ pub enum TermEvent {
         code: String,
         message: String,
     },
+    /// 键盘交互认证：把服务端 prompt 交给前端，等待用户输入后继续。
+    AuthPrompt {
+        prompt_id: Uuid,
+        name: String,
+        instructions: String,
+        prompts: Vec<AuthPromptItem>,
+    },
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct AuthPromptItem {
+    pub prompt: String,
+    pub echo: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]

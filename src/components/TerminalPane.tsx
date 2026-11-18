@@ -10,6 +10,7 @@ import {
   serialInput,
   serialOpen,
   serialSetLines,
+  termAuthRespond,
   termClose,
   termInput,
   termOpen,
@@ -28,26 +29,26 @@ import type { TermEvent } from "../types";
 import { Icon } from "./Icon";
 
 const THEME = {
-  background: "#0d1117",
-  foreground: "#e6edf3",
-  cursor: "#7ee787",
-  selectionBackground: "#264f78",
-  black: "#484f58",
-  red: "#ff7b72",
-  green: "#3fb950",
-  yellow: "#d29922",
-  blue: "#79c0ff",
-  magenta: "#bc8cff",
-  cyan: "#39c5cf",
-  white: "#b1bac4",
-  brightBlack: "#6e7681",
-  brightRed: "#ffa198",
-  brightGreen: "#56d364",
-  brightYellow: "#e3b341",
-  brightBlue: "#a5d6ff",
-  brightMagenta: "#d2a8ff",
-  brightCyan: "#56d4dd",
-  brightWhite: "#f0f6fc",
+  background: "#0e1019",
+  foreground: "#ffffff",
+  cursor: "#3dbe71",
+  selectionBackground: "rgba(61, 190, 113, 0.25)",
+  black: "#1a1a1a",
+  red: "#ff5c5c",
+  green: "#3dbe71",
+  yellow: "#d7a54a",
+  blue: "#6a9fb5",
+  magenta: "#b3a4d8",
+  cyan: "#56d4dd",
+  white: "#d6d6d6",
+  brightBlack: "#6e6e6e",
+  brightRed: "#ff8a8a",
+  brightGreen: "#5fd88c",
+  brightYellow: "#e8c879",
+  brightBlue: "#8fbccf",
+  brightMagenta: "#cbbde8",
+  brightCyan: "#8fe3e8",
+  brightWhite: "#ffffff",
 };
 
 interface Props {
@@ -84,6 +85,13 @@ export function TerminalPane({ tabId, pane, active }: Props) {
     y: number;
     hasSelection: boolean;
     selection: string;
+  } | null>(null);
+  const [authPrompt, setAuthPrompt] = useState<{
+    promptId: string;
+    name: string;
+    instructions: string;
+    prompts: Array<{ prompt: string; echo: boolean }>;
+    values: string[];
   } | null>(null);
 
   const setPaneStatus = useAppStore((s) => s.setPaneStatus);
@@ -447,16 +455,29 @@ export function TerminalPane({ tabId, pane, active }: Props) {
             } else if (event.state.state === "authenticating") {
               setPaneStatus(tabId, pane.key, "connecting", "认证中…");
             } else if (event.state.state === "ready") {
+              setAuthPrompt(null);
               setPaneStatus(tabId, pane.key, "ready", "已连接");
               window.setTimeout(doFit, 60);
             } else if (event.state.state === "closed") {
+              setAuthPrompt(null);
               setPaneStatus(tabId, pane.key, "closed", event.state.reason ?? "已断开");
             }
+            break;
+          case "auth_prompt":
+            setAuthPrompt({
+              promptId: event.prompt_id,
+              name: event.name,
+              instructions: event.instructions,
+              prompts: event.prompts,
+              values: event.prompts.map(() => ""),
+            });
+            setPaneStatus(tabId, pane.key, "connecting", "等待认证输入…");
             break;
           case "title":
             setPaneTitle(tabId, pane.key, event.title);
             break;
           case "exit":
+            setAuthPrompt(null);
             setPaneStatus(
               tabId,
               pane.key,
@@ -465,6 +486,7 @@ export function TerminalPane({ tabId, pane, active }: Props) {
             );
             break;
           case "error":
+            setAuthPrompt(null);
             setPaneStatus(tabId, pane.key, "error", event.message);
             term.writeln(`\r\n\x1b[31m[${event.code}] ${event.message}\x1b[0m`);
             break;
@@ -678,6 +700,25 @@ export function TerminalPane({ tabId, pane, active }: Props) {
     if (session) serialSetLines(session, next.dtr, next.rts).catch(() => undefined);
   };
 
+  const submitAuth = async (responses: string[] | null) => {
+    const current = authPrompt;
+    if (!current) return;
+    setAuthPrompt(null);
+    try {
+      await termAuthRespond(current.promptId, responses);
+    } catch (error) {
+      setPaneStatus(tabId, pane.key, "error", errorText(error));
+      termRef.current?.writeln(`\r\n\x1b[31m认证提示提交失败: ${errorText(error)}\x1b[0m`);
+    }
+  };
+
+  const setAuthValue = (index: number, value: string) =>
+    setAuthPrompt((prev) =>
+      prev
+        ? { ...prev, values: prev.values.map((item, i) => (i === index ? value : item)) }
+        : prev,
+    );
+
   return (
     <div
       className={`terminal-pane${active ? " is-active" : ""}`}
@@ -759,22 +800,28 @@ export function TerminalPane({ tabId, pane, active }: Props) {
           onMouseDown={(event) => event.stopPropagation()}
         >
           <button className="term-menu-item" disabled={!ctxMenu.hasSelection} onMouseDown={copySelection}>
+            <Icon name="copy" size={13} />
             复制
           </button>
           <button className="term-menu-item" onMouseDown={() => void pasteClipboard()}>
+            <Icon name="import" size={13} />
             粘贴
           </button>
           <button className="term-menu-item" onMouseDown={selectAll}>
+            <Icon name="check" size={13} />
             全选
           </button>
           <button className="term-menu-item" onMouseDown={clearScreen}>
+            <Icon name="trash" size={13} />
             清屏
           </button>
           <div className="term-menu-sep" />
           <button className="term-menu-item" onMouseDown={() => splitHere("row")}>
+            <Icon name="split" size={13} />
             水平切分
           </button>
           <button className="term-menu-item" onMouseDown={() => splitHere("column")}>
+            <Icon name="panel" size={13} />
             垂直切分
           </button>
           <button
@@ -784,10 +831,12 @@ export function TerminalPane({ tabId, pane, active }: Props) {
               reconnectRef.current();
             }}
           >
+            <Icon name="refresh" size={13} />
             重新连接
           </button>
           <div className="term-menu-sep" />
           <button className="term-menu-item" disabled={!ctxMenu.hasSelection} onMouseDown={askAi}>
+            <Icon name="spark" size={13} />
             问 AI
           </button>
         </div>
@@ -820,7 +869,57 @@ export function TerminalPane({ tabId, pane, active }: Props) {
           ))}
         </div>
       )}
-      {showOverlay && (
+      {authPrompt && (
+        <div className="auth-mask">
+          <div className="auth-dialog" role="dialog" aria-modal="true">
+            <div className="auth-head">
+              交互认证
+              <span className="auth-target">{pane.profileName}</span>
+            </div>
+            <div className="auth-body">
+              {authPrompt.name && <p className="auth-prompt-name">{authPrompt.name}</p>}
+              {authPrompt.instructions && (
+                <pre className="auth-instructions">{authPrompt.instructions}</pre>
+              )}
+              {authPrompt.prompts.map((item, index) => (
+                <label key={`${index}-${item.prompt}`} className="auth-field">
+                  {item.prompt || `第 ${index + 1} 项输入`}
+                  <input
+                    autoFocus={index === 0}
+                    type={item.echo ? "text" : "password"}
+                    value={authPrompt.values[index] ?? ""}
+                    spellCheck={false}
+                    onChange={(event) => setAuthValue(index, event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && authPrompt.values.every(Boolean)) {
+                        event.preventDefault();
+                        void submitAuth(authPrompt.values);
+                      }
+                    }}
+                  />
+                </label>
+              ))}
+              <p className="muted">
+                服务端每一轮提示都需要逐项输入；取消或 120 秒未操作将按认证失败处理。
+              </p>
+            </div>
+            <div className="auth-foot">
+              <span className="spacer" />
+              <button className="btn-ghost" onClick={() => void submitAuth(null)}>
+                取消连接
+              </button>
+              <button
+                className="btn-primary"
+                disabled={authPrompt.values.some((value) => !value)}
+                onClick={() => void submitAuth(authPrompt.values)}
+              >
+                提交
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showOverlay && !authPrompt && (
         <div className={`pane-overlay overlay-${pane.status}`}>
           <div className="ov-card">
             <span className="ov-icon">

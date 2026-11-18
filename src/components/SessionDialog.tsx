@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
-import { errorText, profileUpsert, serialListPorts, vaultPut } from "../api";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+import {
+  errorText,
+  profileUpsert,
+  readTextFile,
+  serialListPorts,
+  vaultPut,
+} from "../api";
 import type {
   AuthRef,
   Profile,
@@ -10,25 +17,38 @@ import type {
   SerialParity,
   SerialPortInfo,
   SerialPrefs,
+  SshPrefs,
 } from "../types";
-import { Icon } from "./Icon";
+import { Icon, type IconName } from "./Icon";
 
 interface Props {
   open: boolean;
   initial: Profile | null;
   /** 当前构建平台（windows / linux / macos），用于隐藏或提示平台不支持的能力。 */
   platform: string;
+  /** 新建时默认选中的协议，跟随顶部协议 tab。 */
+  defaultProtocol?: Protocol;
   onClose: () => void;
   onSaved: (profile: Profile) => void;
   onError: (message: string) => void;
 }
 
-type AuthMode = "password" | "key" | "none";
+type AuthMode = "password" | "key" | "keyboard_interactive" | "none";
+
+interface JumpForm {
+  host: string;
+  port: string;
+  user: string;
+  authMode: AuthMode;
+  password: string;
+  keyText: string;
+}
 
 interface FormState {
   name: string;
   group: string;
   tags: string;
+  remark: string;
   protocol: Protocol;
   host: string;
   port: string;
@@ -37,13 +57,8 @@ interface FormState {
   password: string;
   keyText: string;
   passphrase: string;
-  useJump: boolean;
-  jumpHost: string;
-  jumpPort: string;
-  jumpUser: string;
-  jumpAuthMode: AuthMode;
-  jumpPassword: string;
-  jumpKeyText: string;
+  jumps: JumpForm[];
+  ssh: SshPrefs;
   rdp: RdpPrefs;
   serial: SerialPrefs;
 }
@@ -102,10 +117,32 @@ const DEFAULT_SERIAL: SerialPrefs = {
   newline: "raw",
 };
 
+const DEFAULT_SSH: SshPrefs = {
+  timeout_ms: 20000,
+  keepalive_ms: 5000,
+  encoding: "utf-8",
+  terminal_type: "",
+  proxy: "",
+  proxy_disabled: false,
+  init_command: "",
+  default_path: "",
+  keepalive_command: "",
+  keepalive_command_ms: 60000,
+  env: [],
+  monitor_disabled: false,
+  disable_pwd_jump: false,
+  x11: false,
+  x11_cookie: "",
+  host_key_algorithms: "",
+  ciphers: "",
+  kex_algorithms: "",
+};
+
 const EMPTY: FormState = {
   name: "",
   group: "",
   tags: "",
+  remark: "",
   protocol: "ssh",
   host: "",
   port: "22",
@@ -114,13 +151,8 @@ const EMPTY: FormState = {
   password: "",
   keyText: "",
   passphrase: "",
-  useJump: false,
-  jumpHost: "",
-  jumpPort: "22",
-  jumpUser: "",
-  jumpAuthMode: "password",
-  jumpPassword: "",
-  jumpKeyText: "",
+  jumps: [],
+  ssh: { ...DEFAULT_SSH },
   rdp: {
     fullscreen: true,
     width: 1920,
@@ -135,17 +167,64 @@ const EMPTY: FormState = {
   serial: { ...DEFAULT_SERIAL },
 };
 
-function toForm(profile: Profile | null): FormState {
-  if (!profile) return { ...EMPTY, rdp: { ...EMPTY.rdp }, serial: { ...DEFAULT_SERIAL } };
-  const jump = profile.jump[0];
+function normalizeSshPrefs(prefs: SshPrefs): SshPrefs {
+  const text = (value?: string | null) => {
+    const trimmed = (value ?? "").trim();
+    return trimmed ? trimmed : null;
+  };
+  return {
+    ...prefs,
+    timeout_ms: Math.max(1000, Number(prefs.timeout_ms) || 20000),
+    keepalive_ms: Math.max(0, Number(prefs.keepalive_ms) || 0),
+    keepalive_command_ms: Math.max(1000, Number(prefs.keepalive_command_ms) || 60000),
+    encoding: text(prefs.encoding) ?? "utf-8",
+    terminal_type: text(prefs.terminal_type),
+    proxy: text(prefs.proxy),
+    init_command: text(prefs.init_command),
+    default_path: text(prefs.default_path),
+    keepalive_command: text(prefs.keepalive_command),
+    x11_cookie: text(prefs.x11_cookie),
+    host_key_algorithms: text(prefs.host_key_algorithms),
+    ciphers: text(prefs.ciphers),
+    kex_algorithms: text(prefs.kex_algorithms),
+    env: prefs.env
+      .map((item) => ({ key: item.key.trim(), value: item.value }))
+      .filter((item) => item.key),
+  };
+}
+
+function toForm(profile: Profile | null, defaultProtocol: Protocol = "ssh"): FormState {
+  if (!profile) {
+    return {
+      ...EMPTY,
+      protocol: defaultProtocol,
+      rdp: { ...EMPTY.rdp },
+      serial: { ...DEFAULT_SERIAL },
+    };
+  }
   const mode = (auth: AuthRef | undefined): AuthMode =>
-    auth?.kind === "password" ? "password" : auth?.kind === "key" ? "key" : "none";
+    auth?.kind === "password"
+      ? "password"
+      : auth?.kind === "key"
+        ? "key"
+        : auth?.kind === "keyboard_interactive"
+          ? "keyboard_interactive"
+          : "none";
+  const jump = profile.jump.map((hop) => ({
+    host: hop.target.host,
+    port: String(hop.target.port),
+    user: hop.target.user,
+    authMode: mode(hop.auth),
+    password: "",
+    keyText: "",
+  }));
   const serial = { ...DEFAULT_SERIAL, ...(profile.options.serial ?? {}) };
   if (!serial.port && profile.protocol === "serial") serial.port = profile.target.host;
   return {
     name: profile.name,
     group: profile.group ?? "",
     tags: profile.tags.join(", "),
+    remark: profile.remark ?? "",
     protocol: profile.protocol,
     host: profile.target.host,
     port: String(profile.target.port),
@@ -154,13 +233,8 @@ function toForm(profile: Profile | null): FormState {
     password: "",
     keyText: "",
     passphrase: "",
-    useJump: Boolean(jump),
-    jumpHost: jump?.target.host ?? "",
-    jumpPort: String(jump?.target.port ?? 22),
-    jumpUser: jump?.target.user ?? "",
-    jumpAuthMode: mode(jump?.auth),
-    jumpPassword: "",
-    jumpKeyText: "",
+    jumps: jump,
+    ssh: { ...DEFAULT_SSH, ...(profile.options.ssh ?? {}) },
     rdp: { ...EMPTY.rdp, ...(profile.options.rdp ?? {}) },
     serial,
   };
@@ -174,17 +248,6 @@ function existingKeySecrets(profile: Profile | null): { key: string | null; pass
   if (profile?.auth.kind === "key") {
     return { key: profile.auth.key, pass: profile.auth.passphrase ?? null };
   }
-  return { key: null, pass: null };
-}
-
-function existingJumpPassword(profile: Profile | null): string | null {
-  const auth = profile?.jump[0]?.auth;
-  return auth?.kind === "password" ? auth.secret : null;
-}
-
-function existingJumpKey(profile: Profile | null): { key: string | null; pass: string | null } {
-  const auth = profile?.jump[0]?.auth;
-  if (auth?.kind === "key") return { key: auth.key, pass: auth.passphrase ?? null };
   return { key: null, pass: null };
 }
 
@@ -205,16 +268,26 @@ async function buildRdpAuth(
   return initial?.auth.kind === "password" ? initial.auth : { kind: "none" };
 }
 
-export function SessionDialog({ open, initial, platform, onClose, onSaved, onError }: Props) {
-  const [form, setForm] = useState<FormState>(() => toForm(initial));
+export function SessionDialog({
+  open,
+  initial,
+  platform,
+  defaultProtocol,
+  onClose,
+  onSaved,
+  onError,
+}: Props) {
+  const [form, setForm] = useState<FormState>(() => toForm(initial, defaultProtocol));
   const [saving, setSaving] = useState(false);
   const [ports, setPorts] = useState<SerialPortInfo[]>([]);
   const [portsLoading, setPortsLoading] = useState(false);
   const [portsError, setPortsError] = useState<string | null>(null);
+  const [navId, setNavId] = useState("sec-basic");
 
   useEffect(() => {
-    if (open) setForm(toForm(initial));
-  }, [open, initial]);
+    if (open) setForm(toForm(initial, defaultProtocol));
+    if (open) setNavId("sec-basic");
+  }, [open, initial, defaultProtocol]);
 
   const refreshPorts = async () => {
     setPortsLoading(true);
@@ -243,6 +316,39 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
   const updateSerial = (patch: Partial<SerialPrefs>) =>
     setForm((prev) => ({ ...prev, serial: { ...prev.serial, ...patch } }));
 
+  const updateSsh = (patch: Partial<SshPrefs>) =>
+    setForm((prev) => ({ ...prev, ssh: { ...prev.ssh, ...patch } }));
+
+  const updateJump = (index: number, patch: Partial<JumpForm>) =>
+    setForm((prev) => ({
+      ...prev,
+      jumps: prev.jumps.map((hop, i) => (i === index ? { ...hop, ...patch } : hop)),
+    }));
+
+  const addJump = () =>
+    setForm((prev) => ({
+      ...prev,
+      jumps: [
+        ...prev.jumps,
+        { host: "", port: "22", user: "", authMode: "password", password: "", keyText: "" },
+      ],
+    }));
+
+  const removeJump = (index: number) =>
+    setForm((prev) => ({ ...prev, jumps: prev.jumps.filter((_, i) => i !== index) }));
+
+  const loadKeyFile = async (index: number | null) => {
+    try {
+      const selected = await openFileDialog({ multiple: false, directory: false });
+      if (!selected || Array.isArray(selected)) return;
+      const text = await readTextFile(selected);
+      if (index == null) update("keyText", text);
+      else updateJump(index, { keyText: text });
+    } catch (error) {
+      onError(errorText(error));
+    }
+  };
+
   const applyPreset = (id: string) => {
     const preset = SERIAL_PRESETS.find((item) => item.id === id);
     if (!preset) return; // 自定义：保留当前值
@@ -258,6 +364,7 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
     label: string,
   ): Promise<AuthRef> => {
     if (mode === "none") return { kind: "none" };
+    if (mode === "keyboard_interactive") return { kind: "keyboard_interactive" };
     if (mode === "password") {
       if (password.trim()) {
         const id = await vaultPut(
@@ -336,29 +443,32 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
               );
 
         const jump = [];
-        if (form.useJump && form.protocol === "ssh") {
-          if (!form.jumpHost.trim() || !form.jumpUser.trim()) {
-            throw new Error("跳板机的主机和用户名不能为空");
+        if (form.protocol === "ssh") {
+          for (const [index, hop] of form.jumps.entries()) {
+            if (!hop.host.trim() || !hop.user.trim()) {
+              throw new Error(`第 ${index + 1} 层跳板机的主机和用户名不能为空`);
+            }
+            const hopPort = Number(hop.port) || 22;
+            const hopAuth = await buildAuth(
+              hop.authMode,
+              hop.password,
+              hop.keyText,
+              "",
+              initial?.jump[index]?.auth,
+              `${form.name.trim()} 跳板机 ${index + 1}`,
+            );
+            jump.push({
+              target: { host: hop.host.trim(), port: hopPort, user: hop.user.trim() },
+              auth: hopAuth,
+            });
           }
-          const jumpPort = Number(form.jumpPort) || 22;
-          const jumpAuth = await buildAuth(
-            form.jumpAuthMode,
-            form.jumpPassword,
-            form.jumpKeyText,
-            "",
-            initial?.jump[0]?.auth,
-            `${form.name.trim()} 跳板机`,
-          );
-          jump.push({
-            target: { host: form.jumpHost.trim(), port: jumpPort, user: form.jumpUser.trim() },
-            auth: jumpAuth,
-          });
         }
 
         profile = {
           id: initial?.id ?? crypto.randomUUID(),
           name: form.name.trim(),
           group: form.group.trim() || null,
+          remark: form.remark.trim() || null,
           protocol: form.protocol,
           target: {
             host: form.host.trim(),
@@ -371,7 +481,9 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
           options:
             form.protocol === "rdp"
               ? { rdp: { ...form.rdp, domain: (form.rdp.domain ?? "").trim() || null } }
-              : {},
+              : form.protocol === "ssh"
+                ? { ssh: normalizeSshPrefs(form.ssh) }
+                : {},
         };
       }
       const saved = await profileUpsert(profile);
@@ -400,6 +512,30 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
     platform === "linux"
       ? "Linux 下普通用户默认无权打开串口设备，需要先执行 sudo usermod -aG dialout $USER 并重新登录。"
       : null;
+  const navItems: Array<{ id: string; label: string; icon: IconName }> =
+    form.protocol === "serial"
+      ? [
+          { id: "sec-basic", label: "基本信息", icon: "info" },
+          { id: "sec-serial", label: "串口参数", icon: "plug" },
+        ]
+      : form.protocol === "rdp"
+        ? [
+            { id: "sec-basic", label: "基本信息", icon: "info" },
+            { id: "sec-rdp-auth", label: "登录凭据", icon: "lock" },
+            { id: "sec-rdp", label: "RDP 参数", icon: "link" },
+          ]
+        : [
+            { id: "sec-basic", label: "基本信息", icon: "info" },
+            { id: "sec-conn", label: "连接设置", icon: "term" },
+            { id: "sec-jump", label: "跳板机", icon: "link" },
+            { id: "sec-proxy", label: "代理设置", icon: "lock" },
+            { id: "sec-other", label: "其他设置", icon: "gear" },
+            { id: "sec-init", label: "初始化", icon: "clock" },
+          ];
+  const jumpTo = (id: string) => {
+    setNavId(id);
+    document.getElementById(id)?.scrollIntoView({ block: "nearest" });
+  };
 
   return (
     <div className="dlg-mask" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
@@ -412,7 +548,21 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
           </button>
         </div>
 
-        <div className="dlg-body">
+        <div className="dlg-body dlg-split">
+          <nav className="dlg-nav">
+            {navItems.map((item) => (
+              <button
+                key={item.id}
+                className={`dlg-nav-item${navId === item.id ? " is-active" : ""}`}
+                onClick={() => jumpTo(item.id)}
+              >
+                <Icon name={item.icon} size={14} />
+                {item.label}
+              </button>
+            ))}
+          </nav>
+          <div className="dlg-form">
+            <div id="sec-basic">
           <div className="dlg-seg" role="tablist">
             <button
               role="tab"
@@ -490,8 +640,110 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
             </div>
           )}
 
-          {form.protocol === "serial" && (
+          {form.protocol === "ssh" && (
             <>
+              <div className="form-grid">
+                <label className="span-2">
+                  主机备注
+                  <textarea
+                    rows={3}
+                    value={form.remark}
+                    onChange={(e) => update("remark", e.target.value)}
+                    placeholder="用途、负责人、机房位置等"
+                  />
+                </label>
+                <label>
+                  超时时间（毫秒）
+                  <input
+                    value={form.ssh.timeout_ms}
+                    onChange={(e) => updateSsh({ timeout_ms: Number(e.target.value) || 0 })}
+                    placeholder="20000"
+                  />
+                </label>
+                <label>
+                  心跳时间（毫秒）
+                  <input
+                    value={form.ssh.keepalive_ms}
+                    onChange={(e) => updateSsh({ keepalive_ms: Number(e.target.value) || 0 })}
+                    placeholder="5000，0 表示关闭"
+                  />
+                </label>
+              </div>
+
+              <div className="section-title">认证</div>
+              <div className="form-grid">
+                <label>
+                  验证方式
+                  <select
+                    value={form.authMode}
+                    onChange={(e) => update("authMode", e.target.value as AuthMode)}
+                  >
+                    <option value="password">密码</option>
+                    <option value="key">秘钥</option>
+                    <option value="keyboard_interactive">交互认证（OTP / 安全问题）</option>
+                  </select>
+                </label>
+                {form.authMode === "password" && (
+                  <label>
+                    密码 {existingPasswordSecret(initial) && <span className="muted">（留空沿用已保存密码）</span>}
+                    <input
+                      type="password"
+                      value={form.password}
+                      onChange={(e) => update("password", e.target.value)}
+                      placeholder={existingPasswordSecret(initial) ? "••••••••" : ""}
+                    />
+                  </label>
+                )}
+                {form.authMode === "key" && (
+                  <>
+                    <label className="span-2">
+                      登录秘钥
+                      <textarea
+                        rows={5}
+                        value={form.keyText}
+                        onChange={(e) => update("keyText", e.target.value)}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          const file = e.dataTransfer.files[0];
+                          if (file) void file.text().then((text) => update("keyText", text));
+                        }}
+                        placeholder={
+                          existingKeySecrets(initial).key
+                            ? "已保存私钥，留空则不修改"
+                            : "-----BEGIN OPENSSH PRIVATE KEY-----（也可拖拽文件到此处）"
+                        }
+                      />
+                    </label>
+                    <div className="span-2 key-actions">
+                      <button type="button" className="btn-ghost sm" onClick={() => void loadKeyFile(null)}>
+                        加载本地秘钥
+                      </button>
+                      <span className="muted">或把私钥文件拖拽到上方输入框</span>
+                    </div>
+                    <label>
+                      私钥口令（可选）
+                      <input
+                        type="password"
+                        value={form.passphrase}
+                        onChange={(e) => update("passphrase", e.target.value)}
+                        placeholder={existingKeySecrets(initial).pass ? "已保存口令" : ""}
+                      />
+                    </label>
+                  </>
+                )}
+                {form.authMode === "keyboard_interactive" && (
+                  <p className="update-hint span-2">
+                    连接时服务端会逐轮返回提示，弹窗输入 OTP / 安全问题等内容；输入不会保存到本地。
+                  </p>
+                )}
+              </div>
+            </>
+          )}
+            </div>
+
+          {form.protocol === "serial" && (
+            <div id="sec-serial">
               <div className="section-title">串口参数</div>
               <div className="form-grid">
                 <label className="span-2">
@@ -655,11 +907,11 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
                   <p className="serial-hint span-2">{serialGroupHint}</p>
                 )}
               </div>
-            </>
+            </div>
           )}
 
           {form.protocol === "rdp" && (
-            <>
+            <div id="sec-rdp-auth">
               <div className="section-title">登录凭据（写入 Windows 凭据管理器，不落配置文件）</div>
               <div className="form-grid">
                 <label>
@@ -681,119 +933,339 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
                   />
                 </label>
               </div>
-            </>
+            </div>
           )}
 
           {form.protocol === "ssh" && (
-            <>
-              <div className="section-title">认证</div>
+            <div id="sec-conn">
+              <div className="section-title">连接设置</div>
               <div className="form-grid">
                 <label>
-                  方式
-                  <select value={form.authMode} onChange={(e) => update("authMode", e.target.value as AuthMode)}>
-                    <option value="password">密码</option>
-                    <option value="key">私钥</option>
-                    <option value="none">无（仅跳板机可能用到）</option>
+                  编码
+                  <select
+                    value={form.ssh.encoding ?? "utf-8"}
+                    onChange={(e) => updateSsh({ encoding: e.target.value })}
+                  >
+                    <option value="utf-8">UTF-8</option>
+                    <option value="gbk">GBK</option>
+                    <option value="gb18030">GB18030</option>
+                    <option value="big5">BIG5</option>
                   </select>
+                  <span className="muted">远端输出按该编码解码，本地输入按该编码回写。</span>
                 </label>
-                {form.authMode === "password" && (
-                  <label>
-                    密码 {existingPasswordSecret(initial) && <span className="muted">（留空则沿用已保存密码）</span>}
-                    <input
-                      type="password"
-                      value={form.password}
-                      onChange={(e) => update("password", e.target.value)}
-                      placeholder={existingPasswordSecret(initial) ? "••••••••" : ""}
-                    />
-                  </label>
-                )}
-                {form.authMode === "key" && (
-                  <>
-                    <label className="span-2">
-                      私钥内容（OpenSSH / PEM）
-                      <textarea
-                        rows={5}
-                        value={form.keyText}
-                        onChange={(e) => update("keyText", e.target.value)}
-                        placeholder={existingKeySecrets(initial).key ? "已保存私钥，留空则不修改" : "-----BEGIN OPENSSH PRIVATE KEY-----"}
-                      />
-                    </label>
-                    <label>
-                      私钥口令（可选）
-                      <input
-                        type="password"
-                        value={form.passphrase}
-                        onChange={(e) => update("passphrase", e.target.value)}
-                        placeholder={existingKeySecrets(initial).pass ? "已保存口令" : ""}
-                      />
-                    </label>
-                  </>
-                )}
+                <label>
+                  终端类型
+                  <input
+                    value={form.ssh.terminal_type ?? ""}
+                    onChange={(e) => updateSsh({ terminal_type: e.target.value })}
+                    placeholder="xterm-256color"
+                  />
+                  <span className="muted">留空使用 xterm-256color。</span>
+                </label>
               </div>
+            </div>
+          )}
 
-              <div className="section-title">
-                <label className="inline">
+          {form.protocol === "ssh" && (
+            <div id="sec-jump">
+              <div className="section-title">跳板机链路（按顺序连接，第一项最先连接）</div>
+              <div className="jump-list">
+                {form.jumps.map((hop, index) => (
+                  <div className="jump-card" key={index}>
+                    <div className="jump-head">
+                      <span>第 {index + 1} 层</span>
+                      <button type="button" className="btn-ghost sm" onClick={() => removeJump(index)}>
+                        移除
+                      </button>
+                    </div>
+                    <div className="form-grid">
+                      <label className="span-2">
+                        主机 *
+                        <input
+                          value={hop.host}
+                          onChange={(e) => updateJump(index, { host: e.target.value })}
+                          placeholder="跳板机地址"
+                        />
+                      </label>
+                      <label>
+                        端口
+                        <input
+                          value={hop.port}
+                          onChange={(e) => updateJump(index, { port: e.target.value })}
+                        />
+                      </label>
+                      <label>
+                        用户名 *
+                        <input
+                          value={hop.user}
+                          onChange={(e) => updateJump(index, { user: e.target.value })}
+                        />
+                      </label>
+                      <label>
+                        认证
+                        <select
+                          value={hop.authMode}
+                          onChange={(e) =>
+                            updateJump(index, { authMode: e.target.value as AuthMode })
+                          }
+                        >
+                          <option value="password">密码</option>
+                          <option value="key">秘钥</option>
+                          <option value="keyboard_interactive">交互认证</option>
+                          <option value="none">无</option>
+                        </select>
+                      </label>
+                      {hop.authMode === "password" && (
+                        <label>
+                          密码
+                          <input
+                            type="password"
+                            value={hop.password}
+                            onChange={(e) => updateJump(index, { password: e.target.value })}
+                            placeholder={
+                              initial?.jump[index]?.auth.kind === "password" ? "留空沿用" : ""
+                            }
+                          />
+                        </label>
+                      )}
+                      {hop.authMode === "key" && (
+                        <label className="span-2">
+                          私钥
+                          <textarea
+                            rows={4}
+                            value={hop.keyText}
+                            onChange={(e) => updateJump(index, { keyText: e.target.value })}
+                            onDragOver={(e) => e.preventDefault()}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              const file = e.dataTransfer.files[0];
+                              if (file) void file.text().then((text) => updateJump(index, { keyText: text }));
+                            }}
+                            placeholder={
+                              initial?.jump[index]?.auth.kind === "key"
+                                ? "已保存私钥，留空不修改"
+                                : "粘贴私钥，或拖拽文件到此处"
+                            }
+                          />
+                          <button
+                            type="button"
+                            className="btn-ghost sm key-load"
+                            onClick={() => void loadKeyFile(index)}
+                          >
+                            加载本地秘钥
+                          </button>
+                        </label>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <button type="button" className="btn-ghost sm" onClick={addJump}>
+                + 添加跳板机
+              </button>
+            </div>
+          )}
+
+          {form.protocol === "ssh" && (
+            <div id="sec-proxy">
+              <div className="section-title">代理设置</div>
+              <div className="form-grid">
+                <label className="inline span-2">
                   <input
                     type="checkbox"
-                    checked={form.useJump}
-                    onChange={(e) => update("useJump", e.target.checked)}
+                    checked={form.ssh.proxy_disabled}
+                    onChange={(e) => updateSsh({ proxy_disabled: e.target.checked })}
                   />
-                  通过跳板机（ProxyJump，当前版本支持一层）
+                  禁用代理
+                </label>
+                <label className="span-2">
+                  代理地址
+                  <input
+                    value={form.ssh.proxy ?? ""}
+                    onChange={(e) => updateSsh({ proxy: e.target.value })}
+                    placeholder="socks5://127.0.0.1:1080 或 http://user:pass@127.0.0.1:8080"
+                    disabled={form.ssh.proxy_disabled}
+                  />
+                  <span className="muted">
+                    支持 socks5://、socks5h://、http://；用户名密码可直接写在地址中。
+                  </span>
+                </label>
+                <p className="update-hint span-2">
+                  代理在建立 SSH 连接前完成握手；仅代理首层连接，跳板机之间的通道仍走 SSH。
+                </p>
+              </div>
+            </div>
+          )}
+
+          {form.protocol === "ssh" && (
+            <div id="sec-other">
+              <div className="section-title">其他设置</div>
+              <div className="form-grid">
+                <label className="inline span-2">
+                  <input
+                    type="checkbox"
+                    checked={form.ssh.monitor_disabled}
+                    onChange={(e) => updateSsh({ monitor_disabled: e.target.checked })}
+                  />
+                  禁止列表监控
+                  <span className="pending-tag">暂未生效</span>
+                </label>
+                <label className="inline span-2">
+                  <input
+                    type="checkbox"
+                    checked={form.ssh.disable_pwd_jump}
+                    onChange={(e) => updateSsh({ disable_pwd_jump: e.target.checked })}
+                  />
+                  禁用 pwd 自动跳转
+                  <span className="pending-tag">暂未生效</span>
+                </label>
+                <label className="inline span-2">
+                  <input
+                    type="checkbox"
+                    checked={form.ssh.x11}
+                    onChange={(e) => updateSsh({ x11: e.target.checked })}
+                  />
+                  启用 X11 转发
+                  <span className="pending-tag">暂未生效</span>
+                </label>
+                <label className="span-2">
+                  X11 Cookie
+                  <input
+                    value={form.ssh.x11_cookie ?? ""}
+                    onChange={(e) => updateSsh({ x11_cookie: e.target.value })}
+                    disabled={!form.ssh.x11}
+                    placeholder="MIT-MAGIC-COOKIE-1"
+                  />
+                </label>
+                <label>
+                  主机密钥算法
+                  <input
+                    value={form.ssh.host_key_algorithms ?? ""}
+                    onChange={(e) => updateSsh({ host_key_algorithms: e.target.value })}
+                    placeholder="ssh-ed25519,rsa-sha2-512"
+                  />
+                  <span className="pending-tag">暂未生效</span>
+                </label>
+                <label>
+                  Cipher 算法
+                  <input
+                    value={form.ssh.ciphers ?? ""}
+                    onChange={(e) => updateSsh({ ciphers: e.target.value })}
+                    placeholder="aes256-gcm@openssh.com"
+                  />
+                  <span className="pending-tag">暂未生效</span>
+                </label>
+                <label className="span-2">
+                  密钥交换算法
+                  <input
+                    value={form.ssh.kex_algorithms ?? ""}
+                    onChange={(e) => updateSsh({ kex_algorithms: e.target.value })}
+                    placeholder="curve25519-sha256"
+                  />
+                  <span className="pending-tag">暂未生效</span>
                 </label>
               </div>
-              {form.useJump && (
-                <div className="form-grid">
-                  <label className="span-2">
-                    跳板机主机 *
-                    <input value={form.jumpHost} onChange={(e) => update("jumpHost", e.target.value)} />
-                  </label>
-                  <label>
-                    端口
-                    <input value={form.jumpPort} onChange={(e) => update("jumpPort", e.target.value)} />
-                  </label>
-                  <label>
-                    用户名 *
-                    <input value={form.jumpUser} onChange={(e) => update("jumpUser", e.target.value)} />
-                  </label>
-                  <label>
-                    认证
-                    <select
-                      value={form.jumpAuthMode}
-                      onChange={(e) => update("jumpAuthMode", e.target.value as AuthMode)}
+            </div>
+          )}
+
+          {form.protocol === "ssh" && (
+            <div id="sec-init">
+              <div className="section-title">初始化</div>
+              <div className="form-grid">
+                <label className="span-2">
+                  默认路径
+                  <input
+                    value={form.ssh.default_path ?? ""}
+                    onChange={(e) => updateSsh({ default_path: e.target.value })}
+                    placeholder="/var/www"
+                  />
+                  <span className="muted">登录后自动执行 cd（路径会做 shell 转义）。</span>
+                </label>
+                <label className="span-2">
+                  初始执行命令
+                  <textarea
+                    rows={3}
+                    value={form.ssh.init_command ?? ""}
+                    onChange={(e) => updateSsh({ init_command: e.target.value })}
+                    placeholder="例如：export LANG=en_US.UTF-8"
+                  />
+                </label>
+                <label className="span-2">
+                  保活命令
+                  <input
+                    value={form.ssh.keepalive_command ?? ""}
+                    onChange={(e) => updateSsh({ keepalive_command: e.target.value })}
+                    placeholder="例如：echo keepalive"
+                  />
+                </label>
+                <label>
+                  保活周期（毫秒）
+                  <input
+                    value={form.ssh.keepalive_command_ms}
+                    onChange={(e) =>
+                      updateSsh({ keepalive_command_ms: Number(e.target.value) || 0 })
+                    }
+                    placeholder="60000"
+                  />
+                </label>
+                <div className="span-2">
+                  <div className="section-subtitle">
+                    环境变量
+                    <button
+                      type="button"
+                      className="btn-ghost sm"
+                      onClick={() =>
+                        updateSsh({ env: [...form.ssh.env, { key: "", value: "" }] })
+                      }
                     >
-                      <option value="password">密码</option>
-                      <option value="key">私钥</option>
-                      <option value="none">无</option>
-                    </select>
-                  </label>
-                  {form.jumpAuthMode === "password" && (
-                    <label>
-                      密码 {existingJumpPassword(initial) && <span className="muted">（留空沿用）</span>}
+                      + 添加
+                    </button>
+                  </div>
+                  {form.ssh.env.map((item, index) => (
+                    <div className="env-row" key={index}>
                       <input
-                        type="password"
-                        value={form.jumpPassword}
-                        onChange={(e) => update("jumpPassword", e.target.value)}
+                        value={item.key}
+                        onChange={(e) =>
+                          updateSsh({
+                            env: form.ssh.env.map((entry, i) =>
+                              i === index ? { ...entry, key: e.target.value } : entry,
+                            ),
+                          })
+                        }
+                        placeholder="变量名"
                       />
-                    </label>
-                  )}
-                  {form.jumpAuthMode === "key" && (
-                    <label className="span-2">
-                      跳板机私钥
-                      <textarea
-                        rows={4}
-                        value={form.jumpKeyText}
-                        onChange={(e) => update("jumpKeyText", e.target.value)}
-                        placeholder={existingJumpKey(initial).key ? "已保存，留空不修改" : ""}
+                      <input
+                        value={item.value}
+                        onChange={(e) =>
+                          updateSsh({
+                            env: form.ssh.env.map((entry, i) =>
+                              i === index ? { ...entry, value: e.target.value } : entry,
+                            ),
+                          })
+                        }
+                        placeholder="变量值"
                       />
-                    </label>
+                      <button
+                        type="button"
+                        className="btn-ghost sm"
+                        onClick={() =>
+                          updateSsh({ env: form.ssh.env.filter((_, i) => i !== index) })
+                        }
+                      >
+                        删除
+                      </button>
+                    </div>
+                  ))}
+                  {form.ssh.env.length === 0 && (
+                    <p className="muted">登录后通过 SSH SetEnv 下发；服务端拒绝时不阻断登录。</p>
                   )}
                 </div>
-              )}
-            </>
+              </div>
+            </div>
           )}
 
           {form.protocol === "rdp" && (
-            <>
+            <div id="sec-rdp">
               <div className="section-title">RDP 参数（写入 .rdp 后调用 mstsc.exe）</div>
               <div className="form-grid">
                 <label className="inline">
@@ -858,8 +1330,9 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
                   />
                 </label>
               </div>
-            </>
+            </div>
           )}
+          </div>
         </div>
 
         <div className="dlg-foot">

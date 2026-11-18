@@ -29,7 +29,7 @@ pub struct SftpManager {
 
 impl SftpManager {
     pub async fn open(&self, profile: &Profile, vault: &Vault) -> Result<(Uuid, String)> {
-        let conn = connect_profile(profile, vault).await?;
+        let conn = connect_profile(profile, vault, None).await?;
         let channel = conn
             .handle
             .channel_open_session()

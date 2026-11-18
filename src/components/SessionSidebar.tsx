@@ -13,6 +13,9 @@ interface Props {
   onNotice: (message: string, kind?: "info" | "error") => void;
   query: string;
   onQueryChange: (value: string) => void;
+  /** 顶部协议 tab 当前选中的协议，用于同步侧栏过滤与新建按钮文案。 */
+  proto?: ProtoFilter;
+  onCollapse?: () => void;
 }
 
 type ProtoFilter = "ssh" | "rdp" | "serial";
@@ -30,6 +33,8 @@ export function SessionSidebar({
   onNotice,
   query,
   onQueryChange,
+  proto,
+  onCollapse,
 }: Props) {
   const profiles = useAppStore((s) => s.profiles);
   const loading = useAppStore((s) => s.profilesLoading);
@@ -44,6 +49,11 @@ export function SessionSidebar({
     serial: true,
     rdp: true,
   });
+  // 顶部协议 tab 切换时，把侧栏过滤同步为单协议；底部勾选菜单仍可再改。
+  useEffect(() => {
+    if (!proto) return;
+    setEnabled({ ssh: proto === "ssh", serial: proto === "serial", rdp: proto === "rdp" });
+  }, [proto]);
   const [filterOpen, setFilterOpen] = useState(false);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -198,6 +208,7 @@ export function SessionSidebar({
 
   const visibleCount = visible.length;
   const filterLabel = `${allSelected ? "全部" : selectedProtos.map((item) => PROTO_LABEL[item]).join(" + ")} · ${visibleCount}`;
+  const currentLabel = proto ? PROTO_LABEL[proto] : "新建";
   const emptyVariant: "none" | "search" | "hidden" | null =
     profiles.length === 0
       ? "none"
@@ -212,31 +223,40 @@ export function SessionSidebar({
   return (
     <aside className="sidebar" onContextMenu={openContextMenu}>
       <div className="sb-head">
-        <span className="sb-title">会话</span>
-        <span className="sb-count">{profiles.length}</span>
+        <button className="sb-collapse" title="收起会话列表 (Ctrl Shift B)" onClick={onCollapse}>
+          <Icon name="split" size={14} />
+          <span>收起</span>
+        </button>
         <div className="spacer" />
-        <button className="icon-btn sm" title="新建连接" onClick={onNew}>
-          <Icon name="plus" size={14} />
+        <button
+          className="sb-tool"
+          title="刷新会话列表"
+          onClick={() => void loadProfiles()}
+        >
+          <Icon name="refresh" size={13} />
         </button>
-      </div>
-
-      <div className="sb-actions">
-        <button className="btn-primary" onClick={onNew}>
-          <Icon name="plus" size={13} />
-          新建连接
-        </button>
-        <button className="btn-ghost" title="从加密配置导入（.fansshx / 旧版 .json）" onClick={onImport}>
-          <Icon name="import" size={13} />
-          导入
-        </button>
-        <button className="icon-btn sm" title="导出加密配置（.fansshx）" onClick={onExport}>
-          <Icon name="export" size={14} />
+        <button className="sb-tool sb-tool-primary" onClick={onNew} title={`新建 ${currentLabel} 连接`}>
+          <Icon name="plus" size={12} />
+          {currentLabel}
         </button>
       </div>
 
       <div className="sb-list">
         {loading && <div className="sb-hint">加载中…</div>}
         {error && <div className="sb-hint err">{error}</div>}
+        <div className="tree-all">
+            <Icon name="folder" size={13} />
+            <span className="tree-all-name">全部</span>
+            <span className="g-count">{visibleCount}</span>
+            <div className="spacer" />
+            <button
+              className="tree-all-gear"
+              title="按协议筛选会话"
+              onClick={() => setFilterOpen((open) => !open)}
+            >
+              <Icon name="gear" size={13} />
+            </button>
+          </div>
         {groups.map(([group, list]) => {
           const isCollapsed = collapsed[group] ?? false;
           return (
@@ -261,11 +281,24 @@ export function SessionSidebar({
                         : `${profile.target.user ? `${profile.target.user}@` : ""}${profile.target.host}:${profile.target.port}`
                     }`}
                   >
-                    <span className={`proto-tag ${profile.protocol}`}>
-                      {PROTO_TAG[profile.protocol]}
+                    <span className={`s-icon ${profile.protocol}`}>
+                      <Icon
+                        name={
+                          profile.protocol === "serial"
+                            ? "plug"
+                            : profile.protocol === "rdp"
+                              ? "link"
+                              : "term"
+                        }
+                        size={13}
+                      />
                     </span>
                     <span className="s-name">{profile.name}</span>
-                    <span className="s-host">{profile.target.host}</span>
+                    {profile.protocol !== "ssh" && (
+                      <span className={`proto-tag ${profile.protocol}`}>
+                        {PROTO_TAG[profile.protocol]}
+                      </span>
+                    )}
                     <span className={`s-dot ${activeProfileIds.has(profile.id) ? "on" : ""}`} />
                     <div className="s-actions">
                       <button className="mini" title="连接" onClick={() => handleConnect(profile)}>

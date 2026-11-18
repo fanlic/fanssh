@@ -13,7 +13,7 @@ import { SftpPanel } from "./components/SftpPanel";
 import { TabBar } from "./components/TabBar";
 import { TerminalPane } from "./components/TerminalPane";
 import { useAppStore } from "./store";
-import type { DockerContainer, Profile } from "./types";
+import type { DockerContainer, Profile, Protocol } from "./types";
 
 interface Notice {
   message: string;
@@ -35,6 +35,7 @@ export default function App() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [editing, setEditing] = useState<Profile | null>(null);
+  const [proto, setProto] = useState<Protocol>("ssh");
   const [notice, setNotice] = useState<Notice | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [dockerOpen, setDockerOpen] = useState(false);
@@ -179,6 +180,7 @@ export default function App() {
   );
 
   const notify = (message: string, kind: "info" | "error" = "info") => setNotice({ message, kind });
+  const protoLabel = proto === "ssh" ? "SSH" : proto === "serial" ? "串口" : "RDP";
 
   const handleNew = () => {
     setEditing(null);
@@ -187,6 +189,7 @@ export default function App() {
 
   const handleEdit = (profile: Profile) => {
     setEditing(profile);
+    setProto(profile.protocol);
     setDialogOpen(true);
   };
 
@@ -319,21 +322,31 @@ export default function App() {
   return (
     <div className="app-shell">
       <header className="titlebar">
-        <button
-          className="icon-btn tb-toggle"
-          title={sidebarOpen ? "收起侧栏 (Ctrl Shift B)" : "展开侧栏 (Ctrl Shift B)"}
-          onClick={() => setSidebarOpen((value) => !value)}
-        >
-          <Icon name="split" size={14} />
-        </button>
-        <div className="tb-left">
-          <span className="brand-mark">
-            <Icon name="term" size={12} />
-          </span>
-          <span className="brand-name">FanSSH</span>
-          <span className="brand-ver">v{version}</span>
-          <span className="tb-div" />
-          <span className="tb-ws">本地工作区</span>
+        <div className="tb-icons">
+          <button
+            className={`tb-slot${sidebarOpen ? " is-active" : ""}`}
+            title={sidebarOpen ? "收起会话列表 (Ctrl Shift B)" : "展开会话列表 (Ctrl Shift B)"}
+            onClick={() => setSidebarOpen((value) => !value)}
+          >
+            <Icon name="term" size={14} />
+          </button>
+          <button className="tb-slot" title="新建连接" onClick={handleNew}>
+            <Icon name="plus" size={14} />
+          </button>
+          <button
+            className={`tb-slot${sftpProfileId ? " is-active" : ""}`}
+            title={sftpProfileId ? "关闭 SFTP (Ctrl Shift S)" : "打开 SFTP (Ctrl Shift S)"}
+            onClick={handleSftpToggle}
+          >
+            <Icon name="transfer" size={14} />
+          </button>
+          <button
+            className={`tb-slot${dockerOpen ? " is-active" : ""}`}
+            title={dockerOpen ? "关闭 Docker 面板" : "打开 Docker 面板"}
+            onClick={handleDockerToggle}
+          >
+            <Icon name="docker" size={14} />
+          </button>
         </div>
         <div className="tb-quick">
           <Icon name="search" size={13} />
@@ -361,15 +374,48 @@ export default function App() {
           )}
         </div>
         <div className="tb-right">
-          <button className="icon-btn" title="设置" onClick={() => setSettingsOpen(true)}>
-            <Icon name="gear" size={15} />
+          <span className="brand-ver">v{version}</span>
+          <button className="tb-gear" title="设置 (Ctrl ,)" onClick={() => setSettingsOpen(true)}>
+            <Icon name="gear" size={18} />
           </button>
         </div>
       </header>
 
+      <div className="protobar">
+        <div className="proto-tabs" role="tablist">
+          {(["ssh", "serial", "rdp"] as Protocol[])
+            .filter((item) => item !== "rdp" || platform === "windows")
+            .map((item) => (
+              <button
+                key={item}
+                role="tab"
+                aria-selected={proto === item}
+                className={`proto-tab${proto === item ? " is-active" : ""}`}
+                onClick={() => {
+                  setProto(item);
+                  setSidebarOpen(true);
+                }}
+              >
+                {item === "ssh" ? "SSH" : item === "serial" ? "串口" : "RDP"}
+              </button>
+            ))}
+        </div>
+        <div className="spacer" />
+        <button className="proto-action" onClick={handleImport}>
+          <Icon name="import" size={12} />
+          导入
+        </button>
+        <button className="proto-action" onClick={handleExport}>
+          <Icon name="export" size={12} />
+          导出配置
+        </button>
+      </div>
+
       <div className="app-body">
         {sidebarOpen && (
           <SessionSidebar
+            proto={proto}
+            onCollapse={() => setSidebarOpen(false)}
             onNew={handleNew}
             onEdit={handleEdit}
             onImport={handleImport}
@@ -381,10 +427,40 @@ export default function App() {
           />
         )}
 
+        <ActivityBar
+          sftpOpen={sftpProfileId !== null}
+          dockerOpen={dockerOpen}
+          aiOpen={aiOpen}
+          onToggleSftp={handleSftpToggle}
+          onToggleDocker={handleDockerToggle}
+          onToggleAi={toggleAi}
+        />
+
         <main className="workspace">
           <TabBar onSplit={handleSplit} />
 
-          <div className="stage">
+          <div className="workspace-body">
+            {sftpProfile && (
+              <SftpPanel
+                profileId={sftpProfile.id}
+                profileName={sftpProfile.name}
+                onClose={() => setSftpProfileId(null)}
+              />
+            )}
+
+            {dockerOpen && (
+              <DockerPanel
+                profile={activeProfile}
+                sessionId={
+                  activeProfile?.protocol === "ssh" ? (activePane?.sessionId ?? null) : null
+                }
+                paneReady={activePane?.status === "ready"}
+                onClose={() => setDockerOpen(false)}
+                onOpenShell={handleDockerShell}
+              />
+            )}
+
+            <div className="stage">
             <div className="panes-host">
               {tabs.map((tab) => (
                 <div
@@ -405,83 +481,22 @@ export default function App() {
                 <div className="stage-empty">
                   <div className="se-card">
                     <span className="se-logo">
-                      <Icon name="term" size={20} />
+                      <Icon name="term" size={40} />
                     </span>
-                    <h2>FanSSH</h2>
-                    <p>SSH / 串口终端 · SFTP · AI 运维助手 · RDP 调用</p>
+                    <h2>暂无{protoLabel}连接</h2>
+                    <p>通过下方「+ {protoLabel}」按钮添加首个连接。</p>
                     <div className="se-actions">
                       <button className="btn-primary" onClick={handleNew}>
-                        新建服务器配置
-                      </button>
-                      <button className="btn-ghost" onClick={() => { setSidebarOpen(true); quickSearchRef.current?.focus(); }}>
-                        搜索已有会话
+                        + 新建{protoLabel}连接
                       </button>
                     </div>
-                    <p className="se-hint">
-                      在左侧双击服务器即可打开终端，凭据经系统加密后单独存储在本地凭据库。
-                    </p>
                   </div>
                 </div>
               )}
             </div>
+            </div>
           </div>
-
-          <footer className="statusbar">
-            <span className="sb-left">
-              <span className={`dot st-${activePane?.status ?? "idle"}`} />
-              <span className="sb-text">{activePane ? activePane.statusText : "就绪"}</span>
-              {activePane && <span className="sb-meta">{activePane.profileName}</span>}
-              {activeProfile && (
-                <span className="sb-meta mono">
-                  {activeProfile.protocol === "serial"
-                    ? `${activeProfile.target.host} · ${activeProfile.options.serial?.baud_rate ?? 0}`
-                    : `${activeProfile.target.user ? `${activeProfile.target.user}@` : ""}${activeProfile.target.host}`}
-                </span>
-              )}
-            </span>
-            <div className="spacer" />
-            {activeProfile?.protocol === "ssh" && (
-              <button className="sb-btn" onClick={() => setSftpProfileId(activeProfile.id)}>
-                <Icon name="transfer" size={12} />
-                SFTP
-              </button>
-            )}
-            <button className="sb-btn" onClick={() => setSettingsOpen(true)}>
-              <Icon name="refresh" size={12} />
-              检查更新
-            </button>
-            <span className="sb-meta">{profiles.length} 个配置</span>
-          </footer>
-
-          {sftpProfile && (
-            <SftpPanel
-              profileId={sftpProfile.id}
-              profileName={sftpProfile.name}
-              onClose={() => setSftpProfileId(null)}
-            />
-          )}
-
-          {dockerOpen && (
-            <DockerPanel
-              profile={activeProfile}
-              sessionId={
-                activeProfile?.protocol === "ssh" ? (activePane?.sessionId ?? null) : null
-              }
-              paneReady={activePane?.status === "ready"}
-              onClose={() => setDockerOpen(false)}
-              onOpenShell={handleDockerShell}
-            />
-          )}
         </main>
-
-        <ActivityBar
-          sftpOpen={sftpProfileId !== null}
-          dockerOpen={dockerOpen}
-          aiOpen={aiOpen}
-          onToggleSftp={handleSftpToggle}
-          onToggleDocker={handleDockerToggle}
-          onToggleAi={toggleAi}
-        />
 
         <AiSidebar collapsed={!aiOpen} />
       </div>
@@ -497,6 +512,7 @@ export default function App() {
         open={dialogOpen}
         initial={editing}
         platform={platform}
+        defaultProtocol={proto}
         onClose={() => setDialogOpen(false)}
         onSaved={(profile) => {
           void loadProfiles();

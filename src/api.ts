@@ -60,6 +60,19 @@ export function termClose(session: string): Promise<void> {
   return invoke("term_close", { session });
 }
 
+/** 键盘交互认证：responses 为 null 表示取消。 */
+export function termAuthRespond(
+  promptId: string,
+  responses: string[] | null,
+): Promise<void> {
+  return invoke("term_auth_respond", { promptId, responses });
+}
+
+/** 读取用户选择的本地文件（私钥）。 */
+export function readTextFile(path: string): Promise<string> {
+  return invoke("read_text_file", { path });
+}
+
 // ---------------------------------------------------------------------------
 // 串口
 // ---------------------------------------------------------------------------

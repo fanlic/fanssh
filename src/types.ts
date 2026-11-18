@@ -12,6 +12,7 @@ export interface Target {
 export type AuthRef =
   | { kind: "password"; secret: string }
   | { kind: "key"; key: string; passphrase?: string | null }
+  | { kind: "keyboard_interactive" }
   | { kind: "none" };
 
 export interface JumpHop {
@@ -52,9 +53,37 @@ export interface SerialPrefs {
   newline: SerialNewline;
 }
 
+export interface EnvVar {
+  key: string;
+  value: string;
+}
+
+/** SSH 连接扩展参数，与凭据无关，随 profile 持久化。 */
+export interface SshPrefs {
+  timeout_ms: number;
+  keepalive_ms: number;
+  encoding?: string | null;
+  terminal_type?: string | null;
+  proxy?: string | null;
+  proxy_disabled: boolean;
+  init_command?: string | null;
+  default_path?: string | null;
+  keepalive_command?: string | null;
+  keepalive_command_ms: number;
+  env: EnvVar[];
+  monitor_disabled: boolean;
+  disable_pwd_jump: boolean;
+  x11: boolean;
+  x11_cookie?: string | null;
+  host_key_algorithms?: string | null;
+  ciphers?: string | null;
+  kex_algorithms?: string | null;
+}
+
 export interface ProfileOptions {
   rdp?: RdpPrefs | null;
   serial?: SerialPrefs | null;
+  ssh?: SshPrefs | null;
 }
 
 /** 系统串口枚举结果；description 含厂商/产品/序列号，便于区分同型号设备。 */
@@ -86,6 +115,7 @@ export interface Profile {
   id: string;
   name: string;
   group?: string | null;
+  remark?: string | null;
   protocol: Protocol;
   target: Target;
   auth: AuthRef;
@@ -106,12 +136,24 @@ export interface SessionState {
   reason?: string;
 }
 
+export interface AuthPromptItem {
+  prompt: string;
+  echo: boolean;
+}
+
 export type TermEvent =
   | { type: "state"; state: SessionState }
   | { type: "data"; seq: number; text: string }
   | { type: "title"; title: string }
   | { type: "exit"; code: number | null; reason: string | null }
-  | { type: "error"; code: string; message: string };
+  | { type: "error"; code: string; message: string }
+  | {
+      type: "auth_prompt";
+      prompt_id: string;
+      name: string;
+      instructions: string;
+      prompts: AuthPromptItem[];
+    };
 
 export interface RemoteEntry {
   name: string;

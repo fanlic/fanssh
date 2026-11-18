@@ -1,14 +1,81 @@
 use anyhow::{anyhow, bail, Context, Result};
-use russh::client::{self, Handle};
+use russh::client::{self, Handle, KeyboardInteractiveAuthResponse};
 use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use tauri::ipc::Channel as TauriChannel;
+use tokio::sync::{oneshot, Mutex};
+use uuid::Uuid;
 
+use crate::ipc::dto::{AuthPromptItem, TermEvent};
 use crate::session::model::{AuthRef, Profile, Target};
+use crate::transport::proxy;
 use crate::vault::Vault;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
-const AUTH_TIMEOUT: Duration = Duration::from_secs(20);
+const AUTH_TIMEOUT: Duration = Duration::from_secs(180);
+/// 交互认证等待用户输入的最长时间。
+const AUTH_PROMPT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// 键盘交互认证的等待队列。以随机 prompt_id 为键，前端提交后唤醒对应等待。
+#[derive(Clone, Default)]
+pub struct AuthPrompts {
+    pending: Arc<Mutex<HashMap<Uuid, oneshot::Sender<Option<Vec<String>>>>>>,
+}
+
+impl AuthPrompts {
+    async fn ask(
+        &self,
+        on_event: &TauriChannel<TermEvent>,
+        name: String,
+        instructions: String,
+        prompts: Vec<russh::client::Prompt>,
+    ) -> Result<Vec<String>> {
+        let prompt_id = Uuid::new_v4();
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().await.insert(prompt_id, tx);
+        let _ = on_event.send(TermEvent::AuthPrompt {
+            prompt_id,
+            name,
+            instructions,
+            prompts: prompts
+                .iter()
+                .map(|item| AuthPromptItem {
+                    prompt: item.prompt.clone(),
+                    echo: item.echo,
+                })
+                .collect(),
+        });
+        match tokio::time::timeout(AUTH_PROMPT_TIMEOUT, rx).await {
+            Ok(Ok(Some(responses))) => Ok(responses),
+            Ok(Ok(None)) => bail!("已取消键盘交互认证"),
+            Ok(Err(_)) => bail!("交互认证会话已关闭"),
+            Err(_) => {
+                self.pending.lock().await.remove(&prompt_id);
+                bail!("等待交互认证输入超时（{} 秒）", AUTH_PROMPT_TIMEOUT.as_secs())
+            }
+        }
+    }
+
+    /// 前端提交或取消。返回 false 表示没有匹配的等待项（可能已超时）。
+    pub async fn respond(&self, prompt_id: Uuid, responses: Option<Vec<String>>) -> bool {
+        let mut guard = self.pending.lock().await;
+        match guard.remove(&prompt_id) {
+            Some(tx) => {
+                let _ = tx.send(responses);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct AuthUi<'a> {
+    pub prompts: &'a AuthPrompts,
+    pub on_event: &'a TauriChannel<TermEvent>,
+}
 
 pub struct ClientHandler {
     label: String,
@@ -46,10 +113,21 @@ pub struct ConnectedSsh {
     pub _intermediates: Vec<Handle<ClientHandler>>,
 }
 
-pub async fn connect_profile(profile: &Profile, vault: &Vault) -> Result<ConnectedSsh> {
+pub async fn connect_profile(
+    profile: &Profile,
+    vault: &Vault,
+    auth_ui: Option<AuthUi<'_>>,
+) -> Result<ConnectedSsh> {
+    let prefs = profile.ssh_prefs();
+    let timeout = Duration::from_millis(prefs.timeout_ms.max(1000));
+    let keepalive = if prefs.keepalive_ms == 0 {
+        None
+    } else {
+        Some(Duration::from_millis(prefs.keepalive_ms))
+    };
     let config = Arc::new(client::Config {
         inactivity_timeout: Some(Duration::from_secs(900)),
-        keepalive_interval: Some(Duration::from_secs(30)),
+        keepalive_interval: keepalive,
         keepalive_max: 3,
         nodelay: true,
         window_size: 2 * 1024 * 1024,
@@ -61,16 +139,17 @@ pub async fn connect_profile(profile: &Profile, vault: &Vault) -> Result<Connect
     let mut handle: Handle<ClientHandler>;
 
     if let Some(first) = profile.jump.first() {
-        handle = ssh_timeout(
+        let stream =
+            proxy::tcp_connect(&first.target.host, first.target.port, &prefs, timeout).await?;
+        handle = connect_stream_timeout(
+            config.clone(),
+            stream,
+            &first.target.host,
+            timeout,
             "连接跳板机",
-            client::connect(
-                config.clone(),
-                (first.target.host.clone(), first.target.port),
-                ClientHandler::new(&first.target.host),
-            ),
         )
         .await?;
-        auth_with_timeout(&mut handle, &first.target, &first.auth, vault).await?;
+        auth_with_timeout(&mut handle, &first.target, &first.auth, vault, auth_ui).await?;
 
         for hop in profile.jump.iter().skip(1) {
             let channel = ssh_timeout(
@@ -83,16 +162,15 @@ pub async fn connect_profile(profile: &Profile, vault: &Vault) -> Result<Connect
                 ),
             )
             .await?;
-            let mut next = ssh_timeout(
+            let mut next = connect_stream_timeout(
+                config.clone(),
+                channel.into_stream(),
+                &hop.target.host,
+                timeout,
                 "通过跳板建立连接",
-                client::connect_stream(
-                    config.clone(),
-                    channel.into_stream(),
-                    ClientHandler::new(&hop.target.host),
-                ),
             )
             .await?;
-            auth_with_timeout(&mut next, &hop.target, &hop.auth, vault).await?;
+            auth_with_timeout(&mut next, &hop.target, &hop.auth, vault, auth_ui).await?;
             intermediates.push(handle);
             handle = next;
         }
@@ -107,29 +185,34 @@ pub async fn connect_profile(profile: &Profile, vault: &Vault) -> Result<Connect
             ),
         )
         .await?;
-        let mut next = ssh_timeout(
+        let mut next = connect_stream_timeout(
+            config.clone(),
+            channel.into_stream(),
+            &profile.target.host,
+            timeout,
             "通过跳板连接目标主机",
-            client::connect_stream(
-                config.clone(),
-                channel.into_stream(),
-                ClientHandler::new(&profile.target.host),
-            ),
         )
         .await?;
-        auth_with_timeout(&mut next, &profile.target, &profile.auth, vault).await?;
+        auth_with_timeout(&mut next, &profile.target, &profile.auth, vault, auth_ui).await?;
         intermediates.push(handle);
         handle = next;
     } else {
-        handle = ssh_timeout(
-            "建立 SSH 连接",
-            client::connect(
-                config.clone(),
-                (profile.target.host.clone(), profile.target.port),
-                ClientHandler::new(&profile.target.host),
-            ),
+        let stream = proxy::tcp_connect(
+            &profile.target.host,
+            profile.target.port,
+            &prefs,
+            timeout,
         )
         .await?;
-        auth_with_timeout(&mut handle, &profile.target, &profile.auth, vault).await?;
+        handle = connect_stream_timeout(
+            config.clone(),
+            stream,
+            &profile.target.host,
+            timeout,
+            "建立 SSH 连接",
+        )
+        .await?;
+        auth_with_timeout(&mut handle, &profile.target, &profile.auth, vault, auth_ui).await?;
     }
 
     Ok(ConnectedSsh {
@@ -138,15 +221,38 @@ pub async fn connect_profile(profile: &Profile, vault: &Vault) -> Result<Connect
     })
 }
 
+async fn connect_stream_timeout<S>(
+    config: Arc<client::Config>,
+    stream: S,
+    label: &str,
+    timeout: Duration,
+    what: &str,
+) -> Result<Handle<ClientHandler>>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    tokio::time::timeout(
+        timeout,
+        client::connect_stream(config, stream, ClientHandler::new(label)),
+    )
+    .await
+    .map_err(|_| anyhow!("{what}超时（{}ms）", timeout.as_millis()))?
+    .with_context(|| what.to_string())
+}
+
 async fn auth_with_timeout(
     handle: &mut Handle<ClientHandler>,
     target: &Target,
     auth: &AuthRef,
     vault: &Vault,
+    auth_ui: Option<AuthUi<'_>>,
 ) -> Result<()> {
-    tokio::time::timeout(AUTH_TIMEOUT, authenticate(handle, target, auth, vault))
-        .await
-        .map_err(|_| anyhow!("认证超时（{}s）", AUTH_TIMEOUT.as_secs()))?
+    tokio::time::timeout(
+        AUTH_TIMEOUT,
+        authenticate(handle, target, auth, vault, auth_ui),
+    )
+    .await
+    .map_err(|_| anyhow!("认证超时（{}s）", AUTH_TIMEOUT.as_secs()))?
 }
 
 async fn authenticate(
@@ -154,6 +260,7 @@ async fn authenticate(
     target: &Target,
     auth: &AuthRef,
     vault: &Vault,
+    auth_ui: Option<AuthUi<'_>>,
 ) -> Result<()> {
     match auth {
         AuthRef::Password { secret } => {
@@ -198,6 +305,41 @@ async fn authenticate(
                     target.user,
                     target.host
                 );
+            }
+        }
+        AuthRef::KeyboardInteractive => {
+            let ui = auth_ui.ok_or_else(|| {
+                anyhow!("该服务器要求键盘交互认证，但当前入口无法弹出输入框")
+            })?;
+            let mut response = handle
+                .authenticate_keyboard_interactive_start(target.user.as_str(), None::<String>)
+                .await
+                .context("键盘交互认证请求失败")?;
+            loop {
+                match response {
+                    KeyboardInteractiveAuthResponse::Success => break,
+                    KeyboardInteractiveAuthResponse::Failure { .. } => {
+                        bail!(
+                            "认证失败：{}@{} 的键盘交互认证未通过",
+                            target.user,
+                            target.host
+                        );
+                    }
+                    KeyboardInteractiveAuthResponse::InfoRequest {
+                        name,
+                        instructions,
+                        prompts,
+                    } => {
+                        let answers = ui
+                            .prompts
+                            .ask(ui.on_event, name, instructions, prompts)
+                            .await?;
+                        response = handle
+                            .authenticate_keyboard_interactive_respond(answers)
+                            .await
+                            .context("键盘交互认证应答失败")?;
+                    }
+                }
             }
         }
         AuthRef::None => {}

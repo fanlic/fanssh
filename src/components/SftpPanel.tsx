@@ -196,16 +196,15 @@ export function SftpPanel({ profileId, profileName, onClose }: Props) {
   };
 
   return (
-    <div className="drawer-mask" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div className="drawer sftp-drawer">
+    <aside className="side-panel sftp-panel" aria-label="文件工作区">
         <div className="drawer-head">
           <div className="dh-main">
             <div className="dh-title">
               <Icon name="transfer" size={14} />
-              SFTP · {profileName}
+              文件工作区
             </div>
             <div className="dh-sub">
-              {sftpId ? "已连接" : "连接中…"}
+              {profileName} · {sftpId ? "已连接" : "连接中…"}
               {selected ? ` · 已选 ${selected.name}` : ""}
             </div>
           </div>
@@ -341,7 +340,6 @@ export function SftpPanel({ profileId, profileName, onClose }: Props) {
             );
           })}
         </div>
-      </div>
-    </div>
+    </aside>
   );
 }

@@ -15,6 +15,7 @@ type Phase = "idle" | "checking" | "uptodate" | "available" | "confirm" | "insta
 
 export function SettingsDialog({ open, platform, onClose, onNotice }: Props) {
   const [status, setStatus] = useState<UpdaterStatus | null>(null);
+  const [tab, setTab] = useState<"update" | "about">("update");
   const [phase, setPhase] = useState<Phase>("idle");
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -25,6 +26,7 @@ export function SettingsDialog({ open, platform, onClose, onNotice }: Props) {
 
   useEffect(() => {
     if (!open) return;
+    setTab("update");
     setPhase("idle");
     setUpdate(null);
     setError(null);
@@ -84,90 +86,121 @@ export function SettingsDialog({ open, platform, onClose, onNotice }: Props) {
     <div className="dlg-mask" onClick={onClose}>
       <div className="dlg dlg-settings" onClick={(event) => event.stopPropagation()}>
         <div className="dlg-head">
-          <h3>设置 · 关于</h3>
+          <h3>系统配置</h3>
           <button className="icon-btn sm" onClick={onClose} title="关闭">
             ×
           </button>
         </div>
-        <div className="dlg-body">
-          <div className="section-title">版本信息</div>
-          <div className="update-row">
-            <span>当前版本</span>
-            <strong>{status?.currentVersion ?? "读取中…"}</strong>
-          </div>
-          <div className="update-row">
-            <span>更新源</span>
-            <code className="update-endpoint">{status?.endpoint || "未配置"}</code>
-          </div>
-
-          {status?.portable && (
-            <p className="update-hint">
-              便携版不参与自动更新。检测到新版本时请下载新版便携包并解压覆盖（配置与凭据在
-              `data/` 目录，迁移时一并带走）：
-              <br />
-              <code className="update-endpoint">{status.channelUrl}</code>
-            </p>
-          )}
-
-          <div className="section-title">检查更新</div>
-
-          {!updaterSupported && (
-            <p className="update-hint">
-              当前平台（{platform}）暂不支持应用内自动更新。请到发布页下载新的 AppImage 或 deb
-              手动替换，配置与凭据保存在数据目录中，替换后可继续使用。
-            </p>
-          )}
-
-          {phase === "checking" && <p className="muted">正在检查更新…</p>}
-          {phase === "uptodate" && <p className="update-ok">已是最新版本。</p>}
-
-          {(phase === "available" || phase === "confirm") && update && (
-            <div className="update-box">
-              <div className="update-row">
-                <span>新版本</span>
-                <strong>
-                  {update.version}
-                  <span className="muted">（当前 {update.currentVersion}）</span>
-                </strong>
-              </div>
-              {update.date && (
+        <div className="dlg-body dlg-split">
+          <nav className="set-nav">
+            <button
+              className={`set-nav-item${tab === "update" ? " is-active" : ""}`}
+              onClick={() => setTab("update")}
+            >
+              软件更新
+            </button>
+            <button
+              className={`set-nav-item${tab === "about" ? " is-active" : ""}`}
+              onClick={() => setTab("about")}
+            >
+              关于与平台
+            </button>
+          </nav>
+          <div className="set-main">
+            {tab === "about" ? (
+              <div className="set-card">
+                <p className="set-card-title">版本信息</p>
+                <p className="set-card-desc">当前安装的 FanSSH 版本与更新通道。</p>
                 <div className="update-row">
-                  <span>发布时间</span>
-                  <span>{new Date(update.date).toLocaleString()}</span>
+                  <span>当前版本</span>
+                  <strong>{status?.currentVersion ?? "读取中…"}</strong>
                 </div>
-              )}
-              <div className="section-title">更新日志</div>
-              <pre className="update-notes">{update.notes?.trim() || "该版本未提供更新说明。"}</pre>
-            </div>
-          )}
-
-          {phase === "confirm" && (
-            <p className="update-hint">
-              确认后将下载安装包并安装，安装完成后需要重启 FanSSH 才能生效。是否继续？
-            </p>
-          )}
-
-          {phase === "installing" && (
-            <div className="update-progress">
-              <div className="update-progress-track">
-                <div
-                  className="update-progress-bar"
-                  style={{ width: percent === null ? "100%" : `${percent}%` }}
-                />
+                <div className="update-row">
+                  <span>更新源</span>
+                  <code className="update-endpoint">{status?.endpoint || "未配置"}</code>
+                </div>
+                <div className="update-row">
+                  <span>运行平台</span>
+                  <strong>{platform}</strong>
+                </div>
               </div>
-              <span className="muted">
-                {percent === null
-                  ? `已下载 ${sizeText(progress.done)}`
-                  : `${percent}% · ${sizeText(progress.done)}${progress.total ? ` / ${sizeText(progress.total)}` : ""}`}
-              </span>
-            </div>
-          )}
+            ) : (
+              <>
+                {status?.portable && (
+                  <p className="update-hint">
+                    便携版不参与自动更新。检测到新版本时请下载新版便携包并解压覆盖（配置与凭据在
+                    `data/` 目录，迁移时一并带走）：
+                    <br />
+                    <code className="update-endpoint">{status.channelUrl}</code>
+                  </p>
+                )}
 
-          {phase === "installed" && (
-            <p className="update-ok">安装包已就绪。点击「重启并完成安装」后应用会退出并重新启动。</p>
-          )}
+                <div className="set-card">
+                  <p className="set-card-title">检查更新</p>
+                  <p className="set-card-desc">
+                    {updaterSupported
+                      ? "安装版可直接在应用内下载并安装更新，便携版请手动替换。"
+                      : `当前平台（${platform}）暂不支持应用内自动更新，请到发布页下载新的 AppImage 或 deb 手动替换。`}
+                  </p>
 
-          {error && <p className="update-error">{error}</p>}
+                  {phase === "checking" && <p className="muted">正在检查更新…</p>}
+                  {phase === "uptodate" && <p className="update-ok">已是最新版本。</p>}
+
+                  {(phase === "available" || phase === "confirm") && update && (
+                    <div className="update-box">
+                      <div className="update-row">
+                        <span>新版本</span>
+                        <strong>
+                          {update.version}
+                          <span className="muted">（当前 {update.currentVersion}）</span>
+                        </strong>
+                      </div>
+                      {update.date && (
+                        <div className="update-row">
+                          <span>发布时间</span>
+                          <span>{new Date(update.date).toLocaleString()}</span>
+                        </div>
+                      )}
+                      <div className="section-title">更新日志</div>
+                      <pre className="update-notes">
+                        {update.notes?.trim() || "该版本未提供更新说明。"}
+                      </pre>
+                    </div>
+                  )}
+
+                  {phase === "confirm" && (
+                    <p className="update-hint">
+                      确认后将下载安装包并安装，安装完成后需要重启 FanSSH 才能生效。是否继续？
+                    </p>
+                  )}
+
+                  {phase === "installing" && (
+                    <div className="update-progress">
+                      <div className="update-progress-track">
+                        <div
+                          className="update-progress-bar"
+                          style={{ width: percent === null ? "100%" : `${percent}%` }}
+                        />
+                      </div>
+                      <span className="muted">
+                        {percent === null
+                          ? `已下载 ${sizeText(progress.done)}`
+                          : `${percent}% · ${sizeText(progress.done)}${progress.total ? ` / ${sizeText(progress.total)}` : ""}`}
+                      </span>
+                    </div>
+                  )}
+
+                  {phase === "installed" && (
+                    <p className="update-ok">
+                      安装包已就绪。点击「重启并完成安装」后应用会退出并重新启动。
+                    </p>
+                  )}
+
+                  {error && <p className="update-error">{error}</p>}
+                </div>
+              </>
+            )}
+          </div>
         </div>
         <div className="dlg-foot">
           {phase === "confirm" ? (
@@ -202,25 +235,27 @@ export function SettingsDialog({ open, platform, onClose, onNotice }: Props) {
               <button className="btn-ghost" onClick={onClose}>
                 关闭
               </button>
-              <button
-                className="btn-primary"
-                onClick={handleCheck}
-                disabled={
-                  !updaterSupported ||
-                  phase === "checking" ||
-                  phase === "installing" ||
-                  status?.portable === true
-                }
-                title={
-                  !updaterSupported
-                    ? "当前平台暂不支持应用内自动更新"
-                    : status?.portable
-                      ? "便携版请下载新版 zip"
-                      : undefined
-                }
-              >
-                检查更新
-              </button>
+              {tab === "update" && (
+                <button
+                  className="btn-primary"
+                  onClick={handleCheck}
+                  disabled={
+                    !updaterSupported ||
+                    phase === "checking" ||
+                    phase === "installing" ||
+                    status?.portable === true
+                  }
+                  title={
+                    !updaterSupported
+                      ? "当前平台暂不支持应用内自动更新"
+                      : status?.portable
+                        ? "便携版请下载新版 zip"
+                        : undefined
+                  }
+                >
+                  检查更新
+                </button>
+              )}
             </>
           )}
         </div>
