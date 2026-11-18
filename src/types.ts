@@ -1,6 +1,6 @@
 // 与 Rust 侧 serde 模型保持一致的类型定义。
 
-export type Protocol = "ssh" | "rdp" | "serial";
+export type Protocol = "ssh" | "rdp" | "serial" | "tunnel";
 export type SecretKind = "password" | "private_key" | "passphrase" | "token";
 
 export interface Target {
@@ -84,7 +84,37 @@ export interface ProfileOptions {
   rdp?: RdpPrefs | null;
   serial?: SerialPrefs | null;
   ssh?: SshPrefs | null;
+  tunnel?: TunnelPrefs | null;
 }
+
+export type TunnelKind = "local" | "remote" | "dynamic";
+
+/** 一条转发路由。local_* 对本地/动态转发是本机监听，对远程转发是服务器监听。 */
+export interface TunnelRoute {
+  id: string;
+  kind: TunnelKind;
+  local_host: string;
+  local_port: number;
+  remote_host: string;
+  remote_port: number;
+}
+
+/** 隧道配置：服务器引用已有 SSH 配置，凭据仍保存在该 SSH 配置的 vault 引用里。 */
+export interface TunnelPrefs {
+  server_id: string | null;
+  auto_reconnect: boolean;
+  routes: TunnelRoute[];
+}
+
+export type TunnelState = "starting" | "running" | "stopped" | "error";
+
+export type TunnelEvent = {
+  type: "state";
+  route_id: string;
+  state: TunnelState;
+  port: number | null;
+  message: string | null;
+};
 
 /** 系统串口枚举结果；description 含厂商/产品/序列号，便于区分同型号设备。 */
 export interface SerialPortInfo {

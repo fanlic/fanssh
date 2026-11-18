@@ -49,6 +49,28 @@ pub struct AuthPromptItem {
     pub echo: bool,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TunnelState {
+    Starting,
+    Running,
+    Stopped,
+    Error,
+}
+
+/// 端口转发状态事件，按路由 id 上报。
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TunnelEvent {
+    State {
+        route_id: Uuid,
+        state: TunnelState,
+        /// 实际监听端口；本地端口填 0 时由系统分配。
+        port: Option<u16>,
+        message: Option<String>,
+    },
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TransferEvent {

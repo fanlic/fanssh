@@ -10,6 +10,7 @@ interface Props {
   onImport: () => void;
   onExport: () => void;
   onRdp: (profile: Profile) => void;
+  onOpenTunnel: (profile: Profile) => void;
   onNotice: (message: string, kind?: "info" | "error") => void;
   query: string;
   onQueryChange: (value: string) => void;
@@ -18,11 +19,21 @@ interface Props {
   onCollapse?: () => void;
 }
 
-type ProtoFilter = "ssh" | "rdp" | "serial";
+type ProtoFilter = "ssh" | "rdp" | "serial" | "tunnel";
 
-const PROTO_LABEL: Record<ProtoFilter, string> = { ssh: "SSH", rdp: "RDP", serial: "串口" };
-const PROTO_TAG: Record<ProtoFilter, string> = { ssh: "SSH", rdp: "RDP", serial: "SER" };
-const ALL_PROTOS: ProtoFilter[] = ["ssh", "serial", "rdp"];
+const PROTO_LABEL: Record<ProtoFilter, string> = {
+  ssh: "SSH",
+  rdp: "RDP",
+  serial: "串口",
+  tunnel: "隧道",
+};
+const PROTO_TAG: Record<ProtoFilter, string> = {
+  ssh: "SSH",
+  rdp: "RDP",
+  serial: "SER",
+  tunnel: "TUN",
+};
+const ALL_PROTOS: ProtoFilter[] = ["ssh", "serial", "rdp", "tunnel"];
 
 export function SessionSidebar({
   onNew,
@@ -30,6 +41,7 @@ export function SessionSidebar({
   onImport,
   onExport,
   onRdp,
+  onOpenTunnel,
   onNotice,
   query,
   onQueryChange,
@@ -48,11 +60,17 @@ export function SessionSidebar({
     ssh: true,
     serial: true,
     rdp: true,
+    tunnel: true,
   });
   // 顶部协议 tab 切换时，把侧栏过滤同步为单协议；底部勾选菜单仍可再改。
   useEffect(() => {
     if (!proto) return;
-    setEnabled({ ssh: proto === "ssh", serial: proto === "serial", rdp: proto === "rdp" });
+    setEnabled({
+      ssh: proto === "ssh",
+      serial: proto === "serial",
+      rdp: proto === "rdp",
+      tunnel: proto === "tunnel",
+    });
   }, [proto]);
   const [filterOpen, setFilterOpen] = useState(false);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
@@ -118,8 +136,15 @@ export function SessionSidebar({
             ? "rdp 远程桌面"
             : profile.protocol === "serial"
               ? "串口 serial"
-              : "ssh"
+              : profile.protocol === "tunnel"
+                ? "隧道 tunnel 端口转发"
+                : "ssh"
           ).includes(keyword) ||
+          (profile.protocol === "tunnel"
+            ? `${profile.options.tunnel?.routes.length ?? 0} 条路由`
+                .toLowerCase()
+                .includes(keyword)
+            : false) ||
           (profile.protocol === "serial"
             ? `${profile.options.serial?.port ?? ""} ${profile.options.serial?.baud_rate ?? ""}`
                 .toLowerCase()
@@ -136,6 +161,7 @@ export function SessionSidebar({
       ssh: matches.filter((profile) => profile.protocol === "ssh").length,
       rdp: matches.filter((profile) => profile.protocol === "rdp").length,
       serial: matches.filter((profile) => profile.protocol === "serial").length,
+      tunnel: matches.filter((profile) => profile.protocol === "tunnel").length,
     }),
     [matches],
   );
@@ -167,6 +193,8 @@ export function SessionSidebar({
   const handleConnect = (profile: Profile) => {
     if (profile.protocol === "rdp") {
       onRdp(profile);
+    } else if (profile.protocol === "tunnel") {
+      onOpenTunnel(profile);
     } else {
       openProfileTab(profile);
     }
@@ -192,7 +220,7 @@ export function SessionSidebar({
     });
   };
 
-  const selectAll = () => setEnabled({ ssh: true, serial: true, rdp: true });
+  const selectAll = () => setEnabled({ ssh: true, serial: true, rdp: true, tunnel: true });
 
   const openContextMenu = (event: ReactMouseEvent) => {
     event.preventDefault();
@@ -275,10 +303,12 @@ export function SessionSidebar({
                     key={profile.id}
                     className={`session${activeProfileIds.has(profile.id) ? " is-open" : ""}`}
                     onDoubleClick={() => handleConnect(profile)}
-                    title={`双击连接 ${
-                      profile.protocol === "serial"
-                        ? `${profile.target.host} @ ${profile.options.serial?.baud_rate ?? ""}`
-                        : `${profile.target.user ? `${profile.target.user}@` : ""}${profile.target.host}:${profile.target.port}`
+                    title={`双击${
+                      profile.protocol === "tunnel"
+                        ? `打开隧道面板 · ${profile.options.tunnel?.routes.length ?? 0} 条路由`
+                        : profile.protocol === "serial"
+                          ? `连接 ${profile.target.host} @ ${profile.options.serial?.baud_rate ?? ""}`
+                          : `连接 ${profile.target.user ? `${profile.target.user}@` : ""}${profile.target.host}:${profile.target.port}`
                     }`}
                   >
                     <span className={`s-icon ${profile.protocol}`}>
@@ -288,7 +318,9 @@ export function SessionSidebar({
                             ? "plug"
                             : profile.protocol === "rdp"
                               ? "link"
-                              : "term"
+                              : profile.protocol === "tunnel"
+                                ? "transfer"
+                                : "term"
                         }
                         size={13}
                       />

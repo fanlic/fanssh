@@ -18,8 +18,12 @@ import type {
   SerialPortInfo,
   SerialPrefs,
   SshPrefs,
+  TunnelKind,
+  TunnelPrefs,
+  TunnelRoute,
 } from "../types";
 import { Icon, type IconName } from "./Icon";
+import { useAppStore } from "../store";
 
 interface Props {
   open: boolean;
@@ -61,6 +65,7 @@ interface FormState {
   ssh: SshPrefs;
   rdp: RdpPrefs;
   serial: SerialPrefs;
+  tunnel: TunnelPrefs;
 }
 
 /** 串口参数预设：只回填波特率/数据位/停止位/校验/流控，不覆盖端口。 */
@@ -138,6 +143,12 @@ const DEFAULT_SSH: SshPrefs = {
   kex_algorithms: "",
 };
 
+const DEFAULT_TUNNEL: TunnelPrefs = {
+  server_id: null,
+  auto_reconnect: true,
+  routes: [],
+};
+
 const EMPTY: FormState = {
   name: "",
   group: "",
@@ -165,6 +176,7 @@ const EMPTY: FormState = {
     domain: "",
   },
   serial: { ...DEFAULT_SERIAL },
+  tunnel: { ...DEFAULT_TUNNEL, routes: [] },
 };
 
 function normalizeSshPrefs(prefs: SshPrefs): SshPrefs {
@@ -200,6 +212,7 @@ function toForm(profile: Profile | null, defaultProtocol: Protocol = "ssh"): For
       protocol: defaultProtocol,
       rdp: { ...EMPTY.rdp },
       serial: { ...DEFAULT_SERIAL },
+      tunnel: { ...DEFAULT_TUNNEL, routes: [] },
     };
   }
   const mode = (auth: AuthRef | undefined): AuthMode =>
@@ -220,6 +233,14 @@ function toForm(profile: Profile | null, defaultProtocol: Protocol = "ssh"): For
   }));
   const serial = { ...DEFAULT_SERIAL, ...(profile.options.serial ?? {}) };
   if (!serial.port && profile.protocol === "serial") serial.port = profile.target.host;
+  const tunnel: TunnelPrefs = {
+    ...DEFAULT_TUNNEL,
+    ...(profile.options.tunnel ?? {}),
+    routes: (profile.options.tunnel?.routes ?? []).map((route) => ({
+      ...route,
+      local_host: route.local_host || "127.0.0.1",
+    })),
+  };
   return {
     name: profile.name,
     group: profile.group ?? "",
@@ -237,7 +258,32 @@ function toForm(profile: Profile | null, defaultProtocol: Protocol = "ssh"): For
     ssh: { ...DEFAULT_SSH, ...(profile.options.ssh ?? {}) },
     rdp: { ...EMPTY.rdp, ...(profile.options.rdp ?? {}) },
     serial,
+    tunnel,
   };
+}
+
+/** 不同转发类型下字段的实际含义不同，标签随之切换。 */
+function routeLabels(kind: TunnelKind): { listen: string; target: string; hint: string } {
+  switch (kind) {
+    case "remote":
+      return {
+        listen: "服务器监听地址",
+        target: "本机目标地址",
+        hint: "远程转发：服务器监听该端口，收到的连接通过 SSH 回连本机目标。",
+      };
+    case "dynamic":
+      return {
+        listen: "本机监听地址（SOCKS5）",
+        target: "",
+        hint: "动态代理：本机提供 SOCKS5 服务，目标地址由客户端在连接时指定。",
+      };
+    default:
+      return {
+        listen: "本机监听地址",
+        target: "远端目标地址",
+        hint: "本地转发：从本机访问远端。示例：本机 127.0.0.1:3000 -> server:80。",
+      };
+  }
 }
 
 function existingPasswordSecret(profile: Profile | null): string | null {
@@ -283,6 +329,8 @@ export function SessionDialog({
   const [portsLoading, setPortsLoading] = useState(false);
   const [portsError, setPortsError] = useState<string | null>(null);
   const [navId, setNavId] = useState("sec-basic");
+  const profiles = useAppStore((state) => state.profiles);
+  const sshServers = profiles.filter((profile) => profile.protocol === "ssh");
 
   useEffect(() => {
     if (open) setForm(toForm(initial, defaultProtocol));
@@ -318,6 +366,49 @@ export function SessionDialog({
 
   const updateSsh = (patch: Partial<SshPrefs>) =>
     setForm((prev) => ({ ...prev, ssh: { ...prev.ssh, ...patch } }));
+
+  const updateTunnel = (patch: Partial<TunnelPrefs>) =>
+    setForm((prev) => ({ ...prev, tunnel: { ...prev.tunnel, ...patch } }));
+
+  const updateRoute = (index: number, patch: Partial<TunnelRoute>) =>
+    setForm((prev) => ({
+      ...prev,
+      tunnel: {
+        ...prev.tunnel,
+        routes: prev.tunnel.routes.map((route, i) =>
+          i === index ? { ...route, ...patch } : route,
+        ),
+      },
+    }));
+
+  const addRoute = (preset: Partial<TunnelRoute> = {}) =>
+    setForm((prev) => ({
+      ...prev,
+      tunnel: {
+        ...prev.tunnel,
+        routes: [
+          ...prev.tunnel.routes,
+          {
+            id: crypto.randomUUID(),
+            kind: "local",
+            local_host: "127.0.0.1",
+            local_port: 8080,
+            remote_host: "127.0.0.1",
+            remote_port: 80,
+            ...preset,
+          },
+        ],
+      },
+    }));
+
+  const removeRoute = (index: number) =>
+    setForm((prev) => ({
+      ...prev,
+      tunnel: {
+        ...prev.tunnel,
+        routes: prev.tunnel.routes.filter((_, i) => i !== index),
+      },
+    }));
 
   const updateJump = (index: number, patch: Partial<JumpForm>) =>
     setForm((prev) => ({
@@ -402,7 +493,60 @@ export function SessionDialog({
         .filter(Boolean);
 
       let profile: Profile;
-      if (form.protocol === "serial") {
+      if (form.protocol === "tunnel") {
+        const server = sshServers.find((item) => item.id === form.tunnel.server_id);
+        if (!server) throw new Error("请选择隧道使用的 SSH 服务器");
+        if (form.tunnel.routes.length === 0) throw new Error("请至少添加一条转发路由");
+        const routes: TunnelRoute[] = form.tunnel.routes.map((route, index) => {
+          const localPort = Number(route.local_port);
+          if (!Number.isInteger(localPort) || localPort <= 0 || localPort > 65535) {
+            throw new Error(`第 ${index + 1} 条路由的监听端口不合法`);
+          }
+          if (route.kind === "dynamic") {
+            return {
+              id: route.id,
+              kind: route.kind,
+              local_host: route.local_host.trim() || "127.0.0.1",
+              local_port: localPort,
+              remote_host: "",
+              remote_port: 0,
+            };
+          }
+          const remotePort = Number(route.remote_port);
+          if (!route.remote_host.trim()) {
+            throw new Error(`第 ${index + 1} 条路由的目标地址不能为空`);
+          }
+          if (!Number.isInteger(remotePort) || remotePort <= 0 || remotePort > 65535) {
+            throw new Error(`第 ${index + 1} 条路由的目标端口不合法`);
+          }
+          return {
+            id: route.id,
+            kind: route.kind,
+            local_host: route.local_host.trim() || "127.0.0.1",
+            local_port: localPort,
+            remote_host: route.remote_host.trim(),
+            remote_port: remotePort,
+          };
+        });
+        profile = {
+          id: initial?.id ?? crypto.randomUUID(),
+          name: form.name.trim(),
+          group: form.group.trim() || null,
+          protocol: "tunnel",
+          // target 跟随服务器，便于侧栏显示与搜索；实际连接只使用 server_id。
+          target: { ...server.target },
+          auth: { kind: "none" },
+          jump: [],
+          tags,
+          options: {
+            tunnel: {
+              server_id: server.id,
+              auto_reconnect: form.tunnel.auto_reconnect,
+              routes,
+            },
+          },
+        };
+      } else if (form.protocol === "serial") {
         // 串口配置与凭据无关，不触碰 vault。
         const serial: SerialPrefs = {
           ...form.serial,
@@ -513,7 +657,12 @@ export function SessionDialog({
       ? "Linux 下普通用户默认无权打开串口设备，需要先执行 sudo usermod -aG dialout $USER 并重新登录。"
       : null;
   const navItems: Array<{ id: string; label: string; icon: IconName }> =
-    form.protocol === "serial"
+    form.protocol === "tunnel"
+      ? [
+          { id: "sec-basic", label: "基本信息", icon: "info" },
+          { id: "sec-tunnel", label: "路由", icon: "transfer" },
+        ]
+      : form.protocol === "serial"
       ? [
           { id: "sec-basic", label: "基本信息", icon: "info" },
           { id: "sec-serial", label: "串口参数", icon: "plug" },
@@ -596,6 +745,14 @@ export function SessionDialog({
                 RDP 远程桌面
               </button>
             )}
+            <button
+              role="tab"
+              aria-selected={form.protocol === "tunnel"}
+              className={form.protocol === "tunnel" ? "is-active" : ""}
+              onClick={() => update("protocol", "tunnel")}
+            >
+              隧道
+            </button>
           </div>
 
           {!isWindows && form.protocol === "rdp" && (
@@ -619,7 +776,7 @@ export function SessionDialog({
             </label>
           </div>
 
-          {form.protocol !== "serial" && (
+          {form.protocol !== "serial" && form.protocol !== "tunnel" && (
             <div className="form-grid">
               <label className="span-2">
                 主机 *
@@ -638,6 +795,46 @@ export function SessionDialog({
                 />
               </label>
             </div>
+          )}
+
+          {form.protocol === "tunnel" && (
+            <>
+              <div className="form-grid">
+                <label className="span-2">
+                  服务器 *
+                  <select
+                    value={form.tunnel.server_id ?? ""}
+                    onChange={(e) =>
+                      updateTunnel({ server_id: e.target.value || null })
+                    }
+                  >
+                    <option value="">请选择 SSH 服务器</option>
+                    {sshServers.map((server) => (
+                      <option key={server.id} value={server.id}>
+                        {server.name}（{server.target.user}@{server.target.host}:{server.target.port}）
+                      </option>
+                    ))}
+                  </select>
+                  <span className="muted">
+                    隧道复用该 SSH 配置的连接与凭据；服务器需允许 TCP 转发。
+                  </span>
+                </label>
+                {sshServers.length === 0 && (
+                  <p className="update-hint span-2">
+                    还没有 SSH 服务器配置，请先新建一个 SSH 连接再创建隧道。
+                  </p>
+                )}
+                <label className="inline span-2">
+                  <input
+                    type="checkbox"
+                    checked={form.tunnel.auto_reconnect}
+                    onChange={(e) => updateTunnel({ auto_reconnect: e.target.checked })}
+                  />
+                  自动重连
+                  <span className="muted">（隧道意外断开后自动恢复）</span>
+                </label>
+              </div>
+            </>
           )}
 
           {form.protocol === "ssh" && (
@@ -1261,6 +1458,156 @@ export function SessionDialog({
                   )}
                 </div>
               </div>
+            </div>
+          )}
+
+          {form.protocol === "tunnel" && (
+            <div id="sec-tunnel">
+              <div className="section-title">转发路由（可添加多条，连接后分别启停）</div>
+              <div className="jump-list">
+                {form.tunnel.routes.map((route, index) => {
+                  const labels = routeLabels(route.kind);
+                  return (
+                    <div className="jump-card" key={route.id}>
+                      <div className="jump-head">
+                        <span>路由 {index + 1}</span>
+                        <button
+                          type="button"
+                          className="btn-ghost sm"
+                          onClick={() => removeRoute(index)}
+                        >
+                          移除
+                        </button>
+                      </div>
+                      <div className="form-grid">
+                        <label>
+                          类型
+                          <select
+                            value={route.kind}
+                            onChange={(e) =>
+                              updateRoute(index, { kind: e.target.value as TunnelKind })
+                            }
+                          >
+                            <option value="local">本地转发</option>
+                            <option value="remote">远程转发</option>
+                            <option value="dynamic">动态代理（SOCKS5）</option>
+                          </select>
+                        </label>
+                        <label>
+                          {labels.listen}
+                          <div className="field-row">
+                            <input
+                              value={route.local_host}
+                              onChange={(e) =>
+                                updateRoute(index, { local_host: e.target.value })
+                              }
+                              placeholder="127.0.0.1"
+                            />
+                            <input
+                              value={route.local_port}
+                              onChange={(e) =>
+                                updateRoute(index, {
+                                  local_port: Number(e.target.value) || 0,
+                                })
+                              }
+                              placeholder="8080"
+                            />
+                          </div>
+                        </label>
+                        {route.kind !== "dynamic" && (
+                          <label className="span-2">
+                            {labels.target}
+                            <div className="field-row">
+                              <input
+                                value={route.remote_host}
+                                onChange={(e) =>
+                                  updateRoute(index, { remote_host: e.target.value })
+                                }
+                                placeholder="127.0.0.1"
+                              />
+                              <input
+                                value={route.remote_port}
+                                onChange={(e) =>
+                                  updateRoute(index, {
+                                    remote_port: Number(e.target.value) || 0,
+                                  })
+                                }
+                                placeholder="3306"
+                              />
+                            </div>
+                          </label>
+                        )}
+                        <p className="muted span-2">{labels.hint}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="key-actions">
+                <button type="button" className="btn-ghost sm" onClick={() => addRoute()}>
+                  + 添加路由
+                </button>
+                <span className="muted">快速填充</span>
+                <button
+                  type="button"
+                  className="btn-ghost sm"
+                  onClick={() =>
+                    addRoute({
+                      kind: "dynamic",
+                      local_port: 1080,
+                      remote_host: "",
+                      remote_port: 0,
+                    })
+                  }
+                >
+                  动态代理：SOCKS5 1080
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost sm"
+                  onClick={() =>
+                    addRoute({
+                      kind: "local",
+                      local_port: 3307,
+                      remote_host: "127.0.0.1",
+                      remote_port: 3306,
+                    })
+                  }
+                >
+                  本地转发：MySQL 本机 3307 → 远端 3306
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost sm"
+                  onClick={() =>
+                    addRoute({
+                      kind: "local",
+                      local_port: 8080,
+                      remote_host: "127.0.0.1",
+                      remote_port: 80,
+                    })
+                  }
+                >
+                  本地转发：Web 本机 8080 → 远端 80
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost sm"
+                  onClick={() =>
+                    addRoute({
+                      kind: "remote",
+                      local_port: 9000,
+                      remote_host: "127.0.0.1",
+                      remote_port: 3000,
+                    })
+                  }
+                >
+                  远程转发：服务器 9000 → 本机 3000
+                </button>
+              </div>
+              {form.tunnel.routes.length === 0 && (
+                <p className="muted">至少添加一条路由并保存后，才能在隧道面板中启动。</p>
+              )}
             </div>
           )}
 

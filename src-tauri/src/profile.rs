@@ -477,7 +477,7 @@ fn validate(profile: &Profile) -> Result<()> {
     if profile.name.trim().is_empty() {
         bail!("名称不能为空");
     }
-    if profile.protocol != Protocol::Serial {
+    if !matches!(profile.protocol, Protocol::Serial | Protocol::Tunnel) {
         if profile.target.host.trim().is_empty() {
             bail!("主机地址不能为空");
         }
@@ -492,6 +492,34 @@ fn validate(profile: &Profile) -> Result<()> {
             }
         }
         Protocol::Rdp => {}
+        Protocol::Tunnel => {
+            let prefs = profile.tunnel_prefs();
+            if prefs.server_id.is_none() {
+                bail!("隧道需要选择一个 SSH 服务器");
+            }
+            if prefs.routes.is_empty() {
+                bail!("请至少添加一条转发路由");
+            }
+            if !profile.jump.is_empty() {
+                bail!("隧道配置不支持跳板机");
+            }
+            for (index, route) in prefs.routes.iter().enumerate() {
+                if route.local_port == 0 {
+                    bail!("第 {} 条路由的监听端口必须在 1-65535 之间", index + 1);
+                }
+                if route.local_host.trim().is_empty() {
+                    bail!("第 {} 条路由的监听地址不能为空", index + 1);
+                }
+                if route.kind != crate::session::model::TunnelKind::Dynamic {
+                    if route.remote_host.trim().is_empty() {
+                        bail!("第 {} 条路由的目标地址不能为空", index + 1);
+                    }
+                    if route.remote_port == 0 {
+                        bail!("第 {} 条路由的目标端口必须在 1-65535 之间", index + 1);
+                    }
+                }
+            }
+        }
         Protocol::Serial => {
             let prefs = profile.serial_prefs();
             if prefs.port.trim().is_empty() {

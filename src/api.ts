@@ -224,6 +224,28 @@ export function aiNl2Cmd(prompt: string, context: string | null): Promise<Nl2Cmd
 }
 
 // ---------------------------------------------------------------------------
+// 端口转发 / 隧道
+// ---------------------------------------------------------------------------
+
+export async function tunnelStart(
+  profileId: string,
+  routeId: string,
+  onEvent: (event: import("./types").TunnelEvent) => void,
+): Promise<void> {
+  const channel = new Channel<import("./types").TunnelEvent>();
+  channel.onmessage = onEvent;
+  return invoke("tunnel_start", { profileId, routeId, onEvent: channel });
+}
+
+export function tunnelStop(routeId: string): Promise<void> {
+  return invoke("tunnel_stop", { routeId });
+}
+
+export function tunnelActive(): Promise<string[]> {
+  return invoke("tunnel_active");
+}
+
+// ---------------------------------------------------------------------------
 // RDP
 // ---------------------------------------------------------------------------
 

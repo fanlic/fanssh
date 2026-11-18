@@ -9,6 +9,7 @@ use crate::profile::ProfileStore;
 use crate::serial::SerialManager;
 use crate::session::manager::SshManager;
 use crate::transport::sftp::SftpManager;
+use crate::tunnel::TunnelManager;
 use crate::vault::Vault;
 
 pub struct AppState {
@@ -19,6 +20,7 @@ pub struct AppState {
     pub ssh: SshManager,
     pub serial: SerialManager,
     pub sftp: SftpManager,
+    pub tunnel: TunnelManager,
     pub http: reqwest::Client,
 }
 
@@ -42,6 +44,7 @@ impl AppState {
             ssh: SshManager::default(),
             serial: SerialManager::default(),
             sftp: SftpManager::default(),
+            tunnel: TunnelManager::default(),
             http,
         })
     }

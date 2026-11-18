@@ -528,6 +528,61 @@ pub async fn rdp_launch(
 }
 
 // ---------------------------------------------------------------------------
+// 端口转发 / 隧道
+// ---------------------------------------------------------------------------
+
+/// 启动一条转发路由。路由由后端从配置中按 id 取出，前端不能注入任意目标。
+#[tauri::command]
+pub async fn tunnel_start(
+    state: State<'_, AppState>,
+    profile_id: Uuid,
+    route_id: Uuid,
+    on_event: TauriChannel<crate::ipc::dto::TunnelEvent>,
+) -> AppResult<()> {
+    let profile = state
+        .profiles
+        .get(&profile_id)
+        .ok_or_else(|| AppError::new("profile.not_found", "隧道配置不存在"))?;
+    if !matches!(profile.protocol, Protocol::Tunnel) {
+        return Err(AppError::new(
+            "tunnel.invalid_profile",
+            "该配置不是隧道协议",
+        ));
+    }
+    let prefs = profile.tunnel_prefs();
+    let server_id = prefs
+        .server_id
+        .ok_or_else(|| AppError::new("tunnel.server_missing", "隧道还没有选择 SSH 服务器"))?;
+    let server = state.profiles.get(&server_id).ok_or_else(|| {
+        AppError::new(
+            "tunnel.server_missing",
+            "隧道绑定的 SSH 服务器已被删除，请重新选择服务器",
+        )
+    })?;
+    let route = prefs
+        .routes
+        .iter()
+        .find(|route| route.id == route_id)
+        .cloned()
+        .ok_or_else(|| AppError::new("tunnel.route_missing", "找不到该转发路由"))?;
+    let vault = state.vault.clone();
+    state
+        .tunnel
+        .start(&profile, server, vault, route, on_event)
+        .await
+}
+
+#[tauri::command]
+pub async fn tunnel_stop(state: State<'_, AppState>, route_id: Uuid) -> AppResult<()> {
+    state.tunnel.stop(route_id).await
+}
+
+#[tauri::command]
+pub async fn tunnel_active(state: State<'_, AppState>) -> AppResult<Vec<Uuid>> {
+    Ok(state.tunnel.active().await)
+}
+
+// ---------------------------------------------------------------------------
 // 自动更新
 // ---------------------------------------------------------------------------
 

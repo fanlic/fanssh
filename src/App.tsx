@@ -12,6 +12,7 @@ import { SettingsDialog } from "./components/SettingsDialog";
 import { SftpPanel } from "./components/SftpPanel";
 import { TabBar } from "./components/TabBar";
 import { TerminalPane } from "./components/TerminalPane";
+import { TunnelDialog } from "./components/TunnelDialog";
 import { useAppStore } from "./store";
 import type { DockerContainer, Profile, Protocol } from "./types";
 
@@ -42,6 +43,7 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [version, setVersion] = useState("1.0.6");
   const [platform, setPlatform] = useState("windows");
+  const [tunnelProfile, setTunnelProfile] = useState<Profile | null>(null);
   const quickSearchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -180,7 +182,7 @@ export default function App() {
   );
 
   const notify = (message: string, kind: "info" | "error" = "info") => setNotice({ message, kind });
-  const protoLabel = proto === "ssh" ? "SSH" : proto === "serial" ? "串口" : "RDP";
+  const protoLabel = proto === "ssh" ? "SSH" : proto === "serial" ? "串口" : proto === "tunnel" ? "隧道" : "RDP";
 
   const handleNew = () => {
     setEditing(null);
@@ -383,7 +385,7 @@ export default function App() {
 
       <div className="protobar">
         <div className="proto-tabs" role="tablist">
-          {(["ssh", "serial", "rdp"] as Protocol[])
+          {(["ssh", "serial", "rdp", "tunnel"] as Protocol[])
             .filter((item) => item !== "rdp" || platform === "windows")
             .map((item) => (
               <button
@@ -396,7 +398,7 @@ export default function App() {
                   setSidebarOpen(true);
                 }}
               >
-                {item === "ssh" ? "SSH" : item === "serial" ? "串口" : "RDP"}
+                {item === "ssh" ? "SSH" : item === "serial" ? "串口" : item === "tunnel" ? "隧道" : "RDP"}
               </button>
             ))}
         </div>
@@ -421,6 +423,7 @@ export default function App() {
             onImport={handleImport}
             onExport={handleExport}
             onRdp={handleRdp}
+            onOpenTunnel={setTunnelProfile}
             onNotice={notify}
             query={query}
             onQueryChange={setQuery}
@@ -500,6 +503,17 @@ export default function App() {
 
         <AiSidebar collapsed={!aiOpen} />
       </div>
+
+      <TunnelDialog
+        open={tunnelProfile !== null}
+        profile={tunnelProfile}
+        onClose={() => setTunnelProfile(null)}
+        onEdit={(profile) => {
+          setTunnelProfile(null);
+          handleEdit(profile);
+        }}
+        onNotice={notify}
+      />
 
       <SettingsDialog
         open={settingsOpen}

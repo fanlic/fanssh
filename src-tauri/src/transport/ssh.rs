@@ -1,11 +1,12 @@
 use anyhow::{anyhow, bail, Context, Result};
 use russh::client::{self, Handle, KeyboardInteractiveAuthResponse};
 use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
+use russh::{Channel, ChannelOpenFailure};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::ipc::Channel as TauriChannel;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use uuid::Uuid;
 
 use crate::ipc::dto::{AuthPromptItem, TermEvent};
@@ -79,12 +80,19 @@ pub struct AuthUi<'a> {
 
 pub struct ClientHandler {
     label: String,
+    /// 远程端口转发：服务端每接受一个连接就打开 forwarded-tcpip 通道，
+    /// 这里接受通道后交给隧道任务处理。没有隧道时直接拒绝。
+    forward_tx: Option<mpsc::UnboundedSender<Channel<russh::client::Msg>>>,
 }
 
 impl ClientHandler {
-    fn new(label: impl Into<String>) -> Self {
+    fn new(
+        label: impl Into<String>,
+        forward_tx: Option<mpsc::UnboundedSender<Channel<russh::client::Msg>>>,
+    ) -> Self {
         Self {
             label: label.into(),
+            forward_tx,
         }
     }
 }
@@ -104,6 +112,38 @@ impl client::Handler for ClientHandler {
         );
         Ok(true)
     }
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: Channel<russh::client::Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        originator_address: &str,
+        originator_port: u32,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        match self.forward_tx.as_ref() {
+            Some(tx) => {
+                reply.accept().await;
+                log::info!(
+                    "[ssh] {} 转发连接 {}:{} <- {}:{}",
+                    self.label,
+                    connected_address,
+                    connected_port,
+                    originator_address,
+                    originator_port
+                );
+                let _ = tx.send(channel);
+            }
+            None => {
+                reply
+                    .reject(ChannelOpenFailure::AdministrativelyProhibited)
+                    .await;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// 已建立的 SSH 连接。`_intermediates` 必须与目标连接同生命周期存活，
@@ -117,6 +157,16 @@ pub async fn connect_profile(
     profile: &Profile,
     vault: &Vault,
     auth_ui: Option<AuthUi<'_>>,
+) -> Result<ConnectedSsh> {
+    connect_profile_with_forward(profile, vault, auth_ui, None).await
+}
+
+/// 与 `connect_profile` 相同，额外把服务端打开的远程转发通道交给 `forward_tx`。
+pub async fn connect_profile_with_forward(
+    profile: &Profile,
+    vault: &Vault,
+    auth_ui: Option<AuthUi<'_>>,
+    forward_tx: Option<mpsc::UnboundedSender<Channel<russh::client::Msg>>>,
 ) -> Result<ConnectedSsh> {
     let prefs = profile.ssh_prefs();
     let timeout = Duration::from_millis(prefs.timeout_ms.max(1000));
@@ -147,6 +197,7 @@ pub async fn connect_profile(
             &first.target.host,
             timeout,
             "连接跳板机",
+            forward_tx.clone(),
         )
         .await?;
         auth_with_timeout(&mut handle, &first.target, &first.auth, vault, auth_ui).await?;
@@ -168,6 +219,7 @@ pub async fn connect_profile(
                 &hop.target.host,
                 timeout,
                 "通过跳板建立连接",
+                forward_tx.clone(),
             )
             .await?;
             auth_with_timeout(&mut next, &hop.target, &hop.auth, vault, auth_ui).await?;
@@ -191,6 +243,7 @@ pub async fn connect_profile(
             &profile.target.host,
             timeout,
             "通过跳板连接目标主机",
+            forward_tx.clone(),
         )
         .await?;
         auth_with_timeout(&mut next, &profile.target, &profile.auth, vault, auth_ui).await?;
@@ -210,6 +263,7 @@ pub async fn connect_profile(
             &profile.target.host,
             timeout,
             "建立 SSH 连接",
+            forward_tx.clone(),
         )
         .await?;
         auth_with_timeout(&mut handle, &profile.target, &profile.auth, vault, auth_ui).await?;
@@ -227,13 +281,14 @@ async fn connect_stream_timeout<S>(
     label: &str,
     timeout: Duration,
     what: &str,
+    forward_tx: Option<mpsc::UnboundedSender<Channel<russh::client::Msg>>>,
 ) -> Result<Handle<ClientHandler>>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     tokio::time::timeout(
         timeout,
-        client::connect_stream(config, stream, ClientHandler::new(label)),
+        client::connect_stream(config, stream, ClientHandler::new(label, forward_tx)),
     )
     .await
     .map_err(|_| anyhow!("{what}超时（{}ms）", timeout.as_millis()))?

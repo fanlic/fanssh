@@ -24,6 +24,7 @@ pub enum Protocol {
     Ssh,
     Rdp,
     Serial,
+    Tunnel,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -337,6 +338,58 @@ impl Default for SshPrefs {
     }
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TunnelKind {
+    /// 本机监听，通过服务器访问远端目标。
+    Local,
+    /// 服务器监听，回连本机目标。
+    Remote,
+    /// 本机提供 SOCKS5 动态代理，由客户端指定目标。
+    Dynamic,
+}
+
+/// 一条转发路由。`local_*` 对本地/动态转发是本机监听地址，对远程转发是服务器监听地址。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TunnelRoute {
+    pub id: Uuid,
+    pub kind: TunnelKind,
+    #[serde(default = "default_tunnel_bind")]
+    pub local_host: String,
+    pub local_port: u16,
+    #[serde(default)]
+    pub remote_host: String,
+    #[serde(default)]
+    pub remote_port: u16,
+}
+
+fn default_tunnel_bind() -> String {
+    "127.0.0.1".to_string()
+}
+
+/// 隧道配置。服务器引用已有 SSH 配置，凭据只保存在该 SSH 配置的 vault 引用里。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TunnelPrefs {
+    /// 承载隧道的 SSH 服务器配置 id。
+    #[serde(default)]
+    pub server_id: Option<Uuid>,
+    /// 允许隧道意外断开后自动重连。
+    #[serde(default = "default_true")]
+    pub auto_reconnect: bool,
+    #[serde(default)]
+    pub routes: Vec<TunnelRoute>,
+}
+
+impl Default for TunnelPrefs {
+    fn default() -> Self {
+        Self {
+            server_id: None,
+            auto_reconnect: true,
+            routes: Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ProfileOptions {
     #[serde(default)]
@@ -345,6 +398,8 @@ pub struct ProfileOptions {
     pub serial: Option<SerialPrefs>,
     #[serde(default)]
     pub ssh: Option<SshPrefs>,
+    #[serde(default)]
+    pub tunnel: Option<TunnelPrefs>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -388,6 +443,11 @@ impl Profile {
     /// SSH 扩展参数；未配置时回落到默认值。
     pub fn ssh_prefs(&self) -> SshPrefs {
         self.options.ssh.clone().unwrap_or_default()
+    }
+
+    /// 隧道参数；未配置时回落到默认值。
+    pub fn tunnel_prefs(&self) -> TunnelPrefs {
+        self.options.tunnel.clone().unwrap_or_default()
     }
 }
 

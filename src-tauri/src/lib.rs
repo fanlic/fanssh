@@ -7,6 +7,7 @@ mod profile;
 mod serial;
 mod session;
 mod transport;
+mod tunnel;
 mod util;
 mod vault;
 
@@ -60,6 +61,9 @@ pub fn run() {
             ai_chat,
             ai_nl2cmd,
             rdp_launch,
+            tunnel_start,
+            tunnel_stop,
+            tunnel_active,
             updater_status,
             app_platform,
             updater_check,
