@@ -32,6 +32,21 @@ export function AiSidebar({ collapsed = false }: { collapsed?: boolean }) {
   const [nlResult, setNlResult] = useState<Nl2CmdResult | null>(null);
   const [autoRun, setAutoRun] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // 终端右键「问 AI」把选中内容送到输入框（不自动发送）。
+  useEffect(() => {
+    const onAsk = (event: Event) => {
+      const text = (event as CustomEvent<string>).detail;
+      if (!text) return;
+      const state = useAppStore.getState();
+      if (!state.aiOpen) state.toggleAi();
+      setInput(text);
+      window.setTimeout(() => inputRef.current?.focus(), 180);
+    };
+    window.addEventListener("fanssh:ask-ai", onAsk);
+    return () => window.removeEventListener("fanssh:ask-ai", onAsk);
+  }, []);
 
   useEffect(() => {
     aiSettingsGet()
@@ -299,6 +314,7 @@ export function AiSidebar({ collapsed = false }: { collapsed?: boolean }) {
 
       <div className="ai-compose">
         <textarea
+          ref={inputRef}
           rows={2}
           value={input}
           placeholder="向 AI 提问…（Ctrl+Enter 发送）"

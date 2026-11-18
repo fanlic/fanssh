@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { errorText, profileExport, profileImport, rdpLaunch, updaterStatus } from "./api";
+import { appPlatform, errorText, profileExport, profileImport, rdpLaunch, updaterStatus } from "./api";
 import { AiSidebar } from "./components/AiSidebar";
 import { ActivityBar } from "./components/ActivityBar";
 import { DockerPanel } from "./components/DockerPanel";
@@ -39,13 +39,17 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [dockerOpen, setDockerOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [version, setVersion] = useState("1.0.5");
+  const [version, setVersion] = useState("1.0.6");
+  const [platform, setPlatform] = useState("windows");
   const quickSearchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     void loadProfiles();
     updaterStatus()
       .then((status) => setVersion(status.currentVersion))
+      .catch(() => undefined);
+    appPlatform()
+      .then(setPlatform)
       .catch(() => undefined);
   }, [loadProfiles]);
 
@@ -56,24 +60,111 @@ export default function App() {
   }, [notice]);
 
   useEffect(() => {
+    const toggleFullscreen = async () => {
+      try {
+        if (!("__TAURI_INTERNALS__" in window)) {
+          if (document.fullscreenElement) await document.exitFullscreen();
+          else await document.documentElement.requestFullscreen();
+          return;
+        }
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        const win = getCurrentWindow();
+        await win.setFullscreen(!(await win.isFullscreen()));
+      } catch {
+        /* 忽略窗口能力不可用 */
+      }
+    };
+
     const onKey = (event: KeyboardEvent) => {
+      if (event.key === "F11") {
+        event.preventDefault();
+        event.stopPropagation();
+        void toggleFullscreen();
+        return;
+      }
       if (!(event.ctrlKey || event.metaKey)) return;
+
+      const target = event.target as HTMLElement | null;
+      // xterm 用隐藏 textarea 接收输入，不能把终端焦点当成“正在编辑表单”。
+      const inTerminal = !!target?.classList.contains("xterm-helper-textarea");
+      const editing =
+        !inTerminal &&
+        !!target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable);
+      if (editing) return;
+
       const key = event.key.toLowerCase();
-      if (key === "k") {
+      const state = useAppStore.getState();
+
+      const isGlobalShortcut =
+        (key === "f" && event.shiftKey) ||
+        (key === "b" && event.shiftKey) ||
+        (key === "j" && event.shiftKey) ||
+        key === "w" ||
+        key === "tab" ||
+        /^[1-5]$/.test(key) ||
+        key === "," ||
+        key === "=" ||
+        key === "+" ||
+        key === "-" ||
+        key === "_" ||
+        (key === "s" && event.shiftKey);
+      // 捕获阶段拦下应用快捷键，避免 xterm 同时把控制字符发给远端。
+      if (!isGlobalShortcut) return;
+      event.preventDefault();
+      event.stopPropagation();
+
+      // 依据：https://docs.xterminal.cn/reference/shortcuts —— 全局搜索使用 Ctrl+Shift+F。
+      if (key === "f" && event.shiftKey) {
         event.preventDefault();
         setSidebarOpen(true);
         quickSearchRef.current?.focus();
         quickSearchRef.current?.select();
-      } else if (key === "b") {
+      } else if (key === "b" && event.shiftKey) {
         event.preventDefault();
         setSidebarOpen((value) => !value);
-      } else if (key === "j") {
+      } else if (key === "j" && event.shiftKey) {
         event.preventDefault();
         toggleAi();
+      } else if (key === "w") {
+        event.preventDefault();
+        if (state.activeTabId) state.closeTab(state.activeTabId);
+      } else if (key === "tab") {
+        event.preventDefault();
+        if (state.tabs.length > 1) {
+          const index = state.tabs.findIndex((tab) => tab.id === state.activeTabId);
+          const delta = event.shiftKey ? -1 : 1;
+          const next = (index + delta + state.tabs.length) % state.tabs.length;
+          state.setActiveTab(state.tabs[next].id);
+        }
+      } else if (/^[1-5]$/.test(key)) {
+        event.preventDefault();
+        const tab = state.tabs[Number(key) - 1];
+        if (tab) state.setActiveTab(tab.id);
+      } else if (key === ",") {
+        event.preventDefault();
+        setSettingsOpen(true);
+      } else if (key === "=" || key === "+") {
+        event.preventDefault();
+        window.dispatchEvent(new CustomEvent("fanssh:zoom", { detail: 1 }));
+      } else if (key === "-" || key === "_") {
+        event.preventDefault();
+        window.dispatchEvent(new CustomEvent("fanssh:zoom", { detail: -1 }));
+      } else if (key === "s" && event.shiftKey) {
+        event.preventDefault();
+        const tab = state.tabs.find((item) => item.id === state.activeTabId);
+        const pane = tab?.panes[tab.activePane];
+        const profile = state.profiles.find((item) => item.id === pane?.profileId);
+        if (profile?.protocol === "ssh") {
+          state.setSftpProfileId(state.sftpProfileId === profile.id ? null : profile.id);
+        }
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toggleAi]);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId);
@@ -100,6 +191,10 @@ export default function App() {
   };
 
   const handleRdp = async (profile: Profile) => {
+    if (platform !== "windows") {
+      notify("当前平台不支持 RDP 远程桌面，请在 Windows 客户端使用该配置。", "error");
+      return;
+    }
     try {
       const handle = await rdpLaunch(profile.id);
       notify(`已生成 ${handle.rdp_file}，正在调用 mstsc.exe${handle.pid ? `（pid ${handle.pid}）` : ""}`);
@@ -226,7 +321,7 @@ export default function App() {
       <header className="titlebar">
         <button
           className="icon-btn tb-toggle"
-          title={sidebarOpen ? "收起侧栏 (Ctrl B)" : "展开侧栏 (Ctrl B)"}
+          title={sidebarOpen ? "收起侧栏 (Ctrl Shift B)" : "展开侧栏 (Ctrl Shift B)"}
           onClick={() => setSidebarOpen((value) => !value)}
         >
           <Icon name="split" size={14} />
@@ -262,7 +357,7 @@ export default function App() {
               <Icon name="x" size={11} />
             </button>
           ) : (
-            <kbd>Ctrl K</kbd>
+            <kbd>Ctrl Shift F</kbd>
           )}
         </div>
         <div className="tb-right">
@@ -395,11 +490,13 @@ export default function App() {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         onNotice={notify}
+        platform={platform}
       />
 
       <SessionDialog
         open={dialogOpen}
         initial={editing}
+        platform={platform}
         onClose={() => setDialogOpen(false)}
         onSaved={(profile) => {
           void loadProfiles();

@@ -71,7 +71,7 @@ interface AppStore {
 
   loadProfiles: () => Promise<void>;
   openProfileTab: (profile: Profile, initialInput?: string) => void;
-  openProfileInSplit: (tabId: string, profile: Profile) => void;
+  openProfileInSplit: (tabId: string, profile: Profile, direction?: "row" | "column") => void;
   closeTab: (tabId: string) => void;
   closePane: (tabId: string, paneKey: string) => void;
   setActiveTab: (tabId: string) => void;
@@ -120,7 +120,7 @@ export const useAppStore = create<AppStore>()((set, get) => ({
     set((state) => ({ tabs: [...state.tabs, tab], activeTabId: tab.id }));
   },
 
-  openProfileInSplit: (tabId, profile) => {
+  openProfileInSplit: (tabId, profile, direction = "row") => {
     const pane = newPane(profile);
     set((state) => ({
       tabs: state.tabs.map((tab) =>
@@ -129,7 +129,7 @@ export const useAppStore = create<AppStore>()((set, get) => ({
               ...tab,
               panes: [...tab.panes, pane],
               activePane: tab.panes.length,
-              direction: tab.panes.length === 0 ? "row" : tab.direction,
+              direction: tab.panes.length === 0 ? "row" : direction,
             }
           : tab,
       ),

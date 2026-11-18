@@ -546,6 +546,12 @@ fn build_updater(app: &tauri::AppHandle) -> AppResult<tauri_plugin_updater::Upda
     })
 }
 
+/// 当前构建平台（windows / linux / macos），供前端隐藏或提示平台不支持的能力。
+#[tauri::command]
+pub fn app_platform() -> String {
+    std::env::consts::OS.to_string()
+}
+
 #[tauri::command]
 pub async fn updater_status(app: tauri::AppHandle) -> AppResult<UpdaterStatusDto> {
     let endpoint = configured_endpoint(&app).unwrap_or_default();

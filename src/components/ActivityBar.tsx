@@ -38,7 +38,7 @@ export function ActivityBar({
       </button>
       <button
         className={`ab-btn${aiOpen ? " is-active" : ""}`}
-        title={aiOpen ? "收起 AI 面板 (Ctrl J)" : "展开 AI 面板 (Ctrl J)"}
+        title={aiOpen ? "收起 AI 面板 (Ctrl Shift J)" : "展开 AI 面板 (Ctrl Shift J)"}
         aria-pressed={aiOpen}
         onClick={onToggleAi}
       >

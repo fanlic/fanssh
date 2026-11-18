@@ -1,18 +1,18 @@
 # FanSSH
 
-面向运维人员和开发者的 Windows 终端与运维客户端（v1 可运行骨架）。
+面向运维人员和开发者的桌面终端与运维客户端（v1 可运行骨架），主要面向 Windows，同时提供 Linux 构建。
 
-技术栈：Tauri 2（Rust 后端）+ React 18 + TypeScript + xterm.js，SSH/SFTP 基于 russh，凭据使用 Windows DPAPI 加密，RDP 调用系统 `mstsc.exe`。
+技术栈：Tauri 2（Rust 后端）+ React 18 + TypeScript + xterm.js，SSH/SFTP 基于 russh，凭据在 Windows 下使用 DPAPI 加密，RDP 调用系统 `mstsc.exe`。
 
 ## 当前已实现
 
 - **SSH 终端**：xterm.js 渲染，真实 SSH 连接与交互；多标签页（新建/关闭/切换）；布局模型支持一个标签内多个面板（分屏）；支持密码、OpenSSH/PEM 私钥（含口令）、一层跳板机（ProxyJump）。
 - **会话管理器**：服务器配置包含名称、协议、host/port/user、认证方式、分组、标签、跳板机；配置与凭据分开存储；JSON 导入/导出（导出不含凭据）。
-- **凭据存储**：Windows 下用 DPAPI 包装主密钥，每条凭据再用 AES-256-GCM 做信封加密；非 Windows 开发环境回退为本地 `secret.key`（仅用于开发调试）。
+- **凭据存储**：Windows 下用 DPAPI 包装主密钥，每条凭据再用 AES-256-GCM 做信封加密；Linux 下改用数据目录中的主密钥文件（见下方「Linux 版本」）。
 - **SFTP**：远程目录浏览、上传、下载、chmod，带传输进度队列（最小可用）。
 - **AI 侧边栏**：支持 Ollama 或 OpenAI 兼容接口；把终端选中内容发给模型分析；自然语言转 Shell 命令，结果经本地风险规则评估后，必须由用户确认才写入终端。
-- **RDP**：配置中可选 RDP 协议，连接时生成 `.rdp` 文件并调用 `mstsc.exe`。
-- **构建流水线**：GitHub Actions 在 Windows runner 上产出 NSIS 安装包与便携版 zip。
+- **RDP**：配置中可选 RDP 协议，连接时生成 `.rdp` 文件并调用 `mstsc.exe`（仅 Windows）。
+- **构建流水线**：GitHub Actions 在 Windows runner 上产出 NSIS 安装包与便携版 zip，在 Ubuntu runner 上产出 AppImage 与 deb。
 
 ## 尚未实现 / 已知限制
 
@@ -72,14 +72,50 @@ npm run tauri build -- --bundles nsis
 
 便携版：把 `fanssh.exe` 与一个空的 `portable.marker` 放在同一目录，应用会把配置与凭据写到 exe 同级的 `data/` 目录，而不是用户 AppData。
 
+## Linux 版本
+
+### 构建
+
+CI 使用 `ubuntu-22.04`（见 `.github/workflows/windows-build.yml` 的 `build-linux`），依赖：
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev librsvg2-dev \
+  libayatana-appindicator3-dev libxdo-dev libssl-dev libudev-dev libfuse2 patchelf \
+  pkg-config build-essential file
+npm install
+npm run tauri build -- --bundles appimage,deb
+```
+
+产物位置：
+
+- AppImage：`src-tauri/target/release/bundle/appimage/*.AppImage`
+- deb：`src-tauri/target/release/bundle/deb/*.deb`
+
+### 与 Windows 版的能力差异
+
+- **凭据加密**：Windows 使用 DPAPI，密文与当前 Windows 用户绑定。Linux 没有等价系统能力，
+  改为在数据目录（`~/.local/share/com.fanssh.app/` 或 `XDG_DATA_HOME` 对应目录）下生成
+  主密钥文件 `secret.key`：目录权限 `0700`、文件权限 `0600`，首次启动自动生成，
+  用于 AES-256-GCM 信封加密。**安全差异**：密钥与密文同机存放，能读取当前用户数据目录的程序
+  即可同时拿到密钥与密文，强度低于 DPAPI；请确保数据目录不被其他用户或其他程序读取。
+- **RDP**：依赖 Windows 的 `mstsc.exe`，Linux 下不提供 RDP 协议入口；已有 RDP 配置在 Linux 上
+  双击会明确提示「当前平台不支持」。
+- **串口**：Linux 普通用户默认无权打开串口设备，需要先执行
+  `sudo usermod -aG dialout $USER` 并重新登录。
+- **SFTP / Docker 面板**：依赖 SSH 会话，Linux 下与 Windows 行为一致。
+- **自动更新**：Linux 版暂未接入应用内自动更新，设置页会明确提示，请下载新的 AppImage 或 deb
+  手动替换；配置与凭据在数据目录中，替换后可继续使用。
+
 ## CI
 
 工作流文件：`.github/workflows/windows-build.yml`，仓库根即本项目目录。
 
 - 触发：推送到 `main`、推送 `v*` 标签、针对相关路径的 Pull Request、手动 `workflow_dispatch`。
-- 流程：安装 Node/Rust → `npm ci` → `npm run build` → `npm run tauri build -- --bundles nsis` → 打包便携版 zip。
-- 产物：`fanssh-nsis-installer`（安装包）与 `fanssh-portable-windows-x64`（便携版 zip）两个 artifact。
-- 推送 `v*` 标签时，额外创建 GitHub Release 并附带上述产物。
+- Windows 流程：安装 Node/Rust → `npm ci` → `npm run build` → `npm run tauri build -- --bundles nsis` → 打包便携版 zip。
+- Windows 产物：`fanssh-nsis-installer`（安装包）与 `fanssh-portable-windows-x64`（便携版 zip）两个 artifact。
+- Linux 流程：`ubuntu-22.04` 安装 webkit2gtk 等依赖 → `npm run tauri build -- --bundles appimage,deb`。
+- Linux 产物：`fanssh-linux-appimage` 与 `fanssh-linux-deb` 两个 artifact。
+- 推送 `v*` 标签时，额外创建 GitHub Release 并附带上述产物（Linux 资产在 Windows Release 完成后追加）。
 - 配置了签名私钥后，构建会生成 `.sig` 与 `latest.json`，并把安装包、便携包、`latest.json` 发布到公开更新通道仓库（默认 `fanlic/fanssh-updates`，可用仓库变量 `UPDATES_REPO` 覆盖）。
 - 工作流中不包含任何账号、邮箱或令牌：源码仓库用 `GITHUB_TOKEN`，跨仓库发布用 secret `UPDATES_TOKEN`。
 
@@ -145,7 +181,7 @@ npx tauri signer generate -w ~/keys/fanssh.key
 ## 数据与安全
 
 - 配置：`profiles.json`，不含任何明文密码或私钥。
-- 凭据：`vault.json`，主密钥由 DPAPI（当前用户范围）包装；每条凭据使用 AES-256-GCM，AAD 绑定 `id:kind`。
+- 凭据：`vault.json`，主密钥在 Windows 下由 DPAPI（当前用户范围）包装，Linux 下由数据目录中的 `secret.key`（目录 0700 / 文件 0600）包装；每条凭据使用 AES-256-GCM，AAD 绑定 `id:kind`。
 - AI API Key 同样存放在凭据库，不写入 `settings.json`，也不会回传到前端。
 - 数据目录优先级：环境变量 `FANSSH_DATA_DIR` → exe 同级存在 `portable.marker` 时的 `data/` → 系统应用数据目录。
 

@@ -61,6 +61,11 @@ pub struct Vault {
 impl Vault {
     pub fn open(dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(dir).context("创建数据目录失败")?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+        }
         let path = dir.join("vault.json");
         let mut file: VaultFile = if path.exists() {
             let bytes = std::fs::read(&path).context("读取 vault.json 失败")?;

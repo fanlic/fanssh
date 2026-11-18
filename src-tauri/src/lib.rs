@@ -59,6 +59,7 @@ pub fn run() {
             ai_nl2cmd,
             rdp_launch,
             updater_status,
+            app_platform,
             updater_check,
             updater_install,
         ])

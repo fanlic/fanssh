@@ -133,6 +133,78 @@ jobs:
           path: FanSSH-portable-windows-x64.zip
           if-no-files-found: error
 
+  build-linux:
+    name: Build Linux (AppImage + deb)
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev \
+            libxdo-dev \
+            libssl-dev \
+            libudev-dev \
+            libfuse2 \
+            patchelf \
+            pkg-config \
+            build-essential \
+            file
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: linux-x64
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Type check & build frontend
+        run: npm run build
+
+      - name: Build Tauri bundle (AppImage + deb)
+        run: npm run tauri build -- --bundles appimage,deb
+
+      - name: Verify build artifacts
+        run: |
+          ls -l src-tauri/target/release/bundle/appimage
+          ls -l src-tauri/target/release/bundle/deb
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: fanssh-linux-appimage
+          path: src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+
+      - name: Upload deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: fanssh-linux-deb
+          path: src-tauri/target/release/bundle/deb/*.deb
+          if-no-files-found: error
+
   release:
     name: Attach artifacts to GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
@@ -216,3 +288,28 @@ jobs:
             dist-artifacts/fanssh-portable-windows-x64/*.zip
           draft: false
           generate_release_notes: true
+
+  release-linux:
+    name: Attach Linux artifacts to GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    # 等 Windows release 建好 Release 后再追加 Linux 资产，避免两个 job 同时创建同一个 Release。
+    needs: [build-linux, release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+
+      - name: Publish Linux assets
+        uses: softprops/action-gh-release@v2
+        with:
+          name: FanSSH ${{ github.ref_name }}
+          files: |
+            dist-artifacts/fanssh-linux-appimage/*.AppImage
+            dist-artifacts/fanssh-linux-deb/*.deb
+          draft: false
+          make_latest: false
+

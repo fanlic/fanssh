@@ -5,13 +5,15 @@ import type { UpdateInfo, UpdaterStatus } from "../types";
 
 interface Props {
   open: boolean;
+  /** 当前构建平台（windows / linux / macos），Linux 下关闭应用内自动更新。 */
+  platform: string;
   onClose: () => void;
   onNotice: (message: string, kind?: "info" | "error") => void;
 }
 
 type Phase = "idle" | "checking" | "uptodate" | "available" | "confirm" | "installing" | "installed";
 
-export function SettingsDialog({ open, onClose, onNotice }: Props) {
+export function SettingsDialog({ open, platform, onClose, onNotice }: Props) {
   const [status, setStatus] = useState<UpdaterStatus | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
@@ -75,6 +77,9 @@ export function SettingsDialog({ open, onClose, onNotice }: Props) {
   const sizeText = (bytes: number) =>
     bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`;
 
+  // Linux 版暂不接入应用内自动更新，避免留下一个永远失败的按钮。
+  const updaterSupported = platform === "windows";
+
   return (
     <div className="dlg-mask" onClick={onClose}>
       <div className="dlg dlg-settings" onClick={(event) => event.stopPropagation()}>
@@ -105,6 +110,13 @@ export function SettingsDialog({ open, onClose, onNotice }: Props) {
           )}
 
           <div className="section-title">检查更新</div>
+
+          {!updaterSupported && (
+            <p className="update-hint">
+              当前平台（{platform}）暂不支持应用内自动更新。请到发布页下载新的 AppImage 或 deb
+              手动替换，配置与凭据保存在数据目录中，替换后可继续使用。
+            </p>
+          )}
 
           {phase === "checking" && <p className="muted">正在检查更新…</p>}
           {phase === "uptodate" && <p className="update-ok">已是最新版本。</p>}
@@ -193,8 +205,19 @@ export function SettingsDialog({ open, onClose, onNotice }: Props) {
               <button
                 className="btn-primary"
                 onClick={handleCheck}
-                disabled={phase === "checking" || phase === "installing" || status?.portable === true}
-                title={status?.portable ? "便携版请下载新版 zip" : undefined}
+                disabled={
+                  !updaterSupported ||
+                  phase === "checking" ||
+                  phase === "installing" ||
+                  status?.portable === true
+                }
+                title={
+                  !updaterSupported
+                    ? "当前平台暂不支持应用内自动更新"
+                    : status?.portable
+                      ? "便携版请下载新版 zip"
+                      : undefined
+                }
               >
                 检查更新
               </button>

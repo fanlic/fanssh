@@ -226,6 +226,10 @@ export function updaterStatus(): Promise<UpdaterStatus> {
   return invoke("updater_status");
 }
 
+export function appPlatform(): Promise<string> {
+  return invoke("app_platform");
+}
+
 export function updaterCheck(): Promise<UpdateInfo | null> {
   return invoke("updater_check");
 }

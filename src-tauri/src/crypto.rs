@@ -18,8 +18,9 @@ const KEY_FILE: &str = "secret.key";
 ///
 /// - Windows：使用 DPAPI（CryptProtectData），密文与当前 Windows 用户绑定，
 ///   复制到其他机器/其他用户下无法解密。
-/// - 其他平台：使用 AES-256-GCM，密钥保存在数据目录的 secret.key（0600），
-///   仅用于本地开发调试，不提供 DPAPI 级别的系统级保护。
+/// - Linux / macOS：使用 AES-256-GCM，主密钥保存在数据目录的 secret.key
+///   （文件 0600，目录 0700，首次启动生成）。密钥与密文同机存放，安全性弱于
+///   DPAPI：能读取当前用户数据目录的程序即可同时拿到密钥与密文。
 pub fn encrypt_secret(plain: &str, dir: &Path) -> Result<String> {
     #[cfg(windows)]
     {
@@ -98,9 +99,31 @@ fn load_or_create_key(dir: &Path) -> Result<[u8; 32]> {
     }
 
     std::fs::create_dir_all(dir).context("创建数据目录失败")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // 数据目录只允许当前用户访问，避免同机其他用户读取密钥与凭据。
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
     let mut key = [0u8; 32];
     rand::rng().fill_bytes(&mut key);
-    std::fs::write(&path, key).context("写入本地密钥失败")?;
+    #[cfg(unix)]
+    let written = {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        // create_new + mode(0o600)：文件从创建起就不可被其他用户读取。
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .context("创建本地密钥失败")?;
+        file.write_all(&key).context("写入本地密钥失败")?;
+        Ok::<(), anyhow::Error>(())
+    };
+    #[cfg(not(unix))]
+    let written = std::fs::write(&path, key).context("写入本地密钥失败");
+    written?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

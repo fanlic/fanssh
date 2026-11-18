@@ -16,6 +16,8 @@ import { Icon } from "./Icon";
 interface Props {
   open: boolean;
   initial: Profile | null;
+  /** 当前构建平台（windows / linux / macos），用于隐藏或提示平台不支持的能力。 */
+  platform: string;
   onClose: () => void;
   onSaved: (profile: Profile) => void;
   onError: (message: string) => void;
@@ -203,7 +205,7 @@ async function buildRdpAuth(
   return initial?.auth.kind === "password" ? initial.auth : { kind: "none" };
 }
 
-export function SessionDialog({ open, initial, onClose, onSaved, onError }: Props) {
+export function SessionDialog({ open, initial, platform, onClose, onSaved, onError }: Props) {
   const [form, setForm] = useState<FormState>(() => toForm(initial));
   const [saving, setSaving] = useState(false);
   const [ports, setPorts] = useState<SerialPortInfo[]>([]);
@@ -383,6 +385,9 @@ export function SessionDialog({ open, initial, onClose, onSaved, onError }: Prop
   };
 
   const presetId = matchSerialPreset(form.serial);
+  // RDP 依赖 Windows 的 mstsc.exe：非 Windows 不提供新建入口，编辑已有 RDP 配置时保留入口并提示。
+  const isWindows = platform === "windows";
+  const showRdpTab = isWindows || form.protocol === "rdp" || initial?.protocol === "rdp";
   const knownPort = ports.some((port) => port.port_name === form.serial.port);
   const portHint = portsLoading
     ? "正在枚举系统串口…"
@@ -391,6 +396,10 @@ export function SessionDialog({ open, initial, onClose, onSaved, onError }: Prop
       : ports.length === 0
         ? "未检测到串口设备。请连接设备后点击刷新，或手动填写端口名。"
         : "同时插入多个 USB 转串口时，可按厂商 / 产品 / 序列号区分。";
+  const serialGroupHint =
+    platform === "linux"
+      ? "Linux 下普通用户默认无权打开串口设备，需要先执行 sudo usermod -aG dialout $USER 并重新登录。"
+      : null;
 
   return (
     <div className="dlg-mask" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
@@ -424,18 +433,27 @@ export function SessionDialog({ open, initial, onClose, onSaved, onError }: Prop
             >
               串口
             </button>
-            <button
-              role="tab"
-              aria-selected={form.protocol === "rdp"}
-              className={form.protocol === "rdp" ? "is-active" : ""}
-              onClick={() => {
-                update("protocol", "rdp");
-                if (form.port === "22") update("port", "3389");
-              }}
-            >
-              RDP 远程桌面
-            </button>
+            {showRdpTab && (
+              <button
+                role="tab"
+                aria-selected={form.protocol === "rdp"}
+                className={form.protocol === "rdp" ? "is-active" : ""}
+                onClick={() => {
+                  update("protocol", "rdp");
+                  if (form.port === "22") update("port", "3389");
+                }}
+              >
+                RDP 远程桌面
+              </button>
+            )}
           </div>
+
+          {!isWindows && form.protocol === "rdp" && (
+            <p className="update-hint">
+              当前平台（{platform}）不支持 RDP 远程桌面：RDP 依赖 Windows 的 mstsc.exe。该配置可以保留，
+              在 Linux 上打开时会提示平台不支持，请到 Windows 客户端使用。
+            </p>
+          )}
           <div className="form-grid">
             <label>
               名称 *
@@ -633,6 +651,9 @@ export function SessionDialog({ open, initial, onClose, onSaved, onError }: Prop
                   启用硬件流控时 RTS 由驱动接管。本地回显默认关闭，设备自身已回显时不会重复显示；开启后会把你输入的字符显示在本地。
                   换行默认原样透传，遇到设备显示错行再改为 CR→CRLF 或 LF→CRLF。
                 </p>
+                {serialGroupHint && (
+                  <p className="serial-hint span-2">{serialGroupHint}</p>
+                )}
               </div>
             </>
           )}
