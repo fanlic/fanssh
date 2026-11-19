@@ -26,6 +26,7 @@ pub enum Protocol {
     Serial,
     Telnet,
     Tunnel,
+    Vnc,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -413,6 +414,50 @@ impl Default for TelnetPrefs {
     }
 }
 
+/// VNC 显示与交互参数。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VncPrefs {
+    /// vnc = VNC 密码认证；none = 无认证。
+    #[serde(default = "default_vnc_auth")]
+    pub auth_method: String,
+    #[serde(default)]
+    pub read_only: bool,
+    #[serde(default = "default_true")]
+    pub shared: bool,
+    #[serde(default = "default_true")]
+    pub scale_viewport: bool,
+    #[serde(default)]
+    pub crop_viewport: bool,
+    #[serde(default = "default_vnc_quality")]
+    pub quality: u8,
+    #[serde(default = "default_vnc_compression")]
+    pub compression: u8,
+}
+
+fn default_vnc_auth() -> String {
+    "vnc".to_string()
+}
+fn default_vnc_quality() -> u8 {
+    6
+}
+fn default_vnc_compression() -> u8 {
+    2
+}
+
+impl Default for VncPrefs {
+    fn default() -> Self {
+        Self {
+            auth_method: default_vnc_auth(),
+            read_only: false,
+            shared: true,
+            scale_viewport: true,
+            crop_viewport: false,
+            quality: default_vnc_quality(),
+            compression: default_vnc_compression(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ProfileOptions {
     #[serde(default)]
@@ -425,6 +470,8 @@ pub struct ProfileOptions {
     pub telnet: Option<TelnetPrefs>,
     #[serde(default)]
     pub tunnel: Option<TunnelPrefs>,
+    #[serde(default)]
+    pub vnc: Option<VncPrefs>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -478,6 +525,11 @@ impl Profile {
     /// Telnet 参数；未配置时回落到默认值。
     pub fn telnet_prefs(&self) -> TelnetPrefs {
         self.options.telnet.clone().unwrap_or_default()
+    }
+
+    /// VNC 参数；未配置时回落到默认值。
+    pub fn vnc_prefs(&self) -> VncPrefs {
+        self.options.vnc.clone().unwrap_or_default()
     }
 }
 

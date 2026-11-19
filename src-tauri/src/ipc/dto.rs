@@ -71,6 +71,54 @@ pub enum TunnelEvent {
     },
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VncState {
+    Connecting,
+    Ready,
+    Closed,
+    Error,
+}
+
+/// VNC 控制事件；画面数据单独走原始字节通道。
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum VncEvent {
+    State {
+        state: VncState,
+        message: Option<String>,
+    },
+    Size {
+        width: u16,
+        height: u16,
+        name: String,
+    },
+    CopyRect {
+        x: u16,
+        y: u16,
+        width: u16,
+        height: u16,
+        src_x: u16,
+        src_y: u16,
+    },
+    Clipboard {
+        text: String,
+        from_server: bool,
+    },
+    Bell,
+    Exit {
+        reason: Option<String>,
+    },
+}
+
+/// 前端发来的 VNC 输入。
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum VncInputDto {
+    Pointer { mask: u8, x: u16, y: u16 },
+    Key { down: bool, keysym: u32 },
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TransferEvent {

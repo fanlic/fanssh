@@ -1,6 +1,6 @@
 // 与 Rust 侧 serde 模型保持一致的类型定义。
 
-export type Protocol = "ssh" | "rdp" | "serial" | "telnet" | "tunnel";
+export type Protocol = "ssh" | "rdp" | "serial" | "telnet" | "tunnel" | "vnc";
 export type SecretKind = "password" | "private_key" | "passphrase" | "token";
 
 export interface Target {
@@ -86,7 +86,41 @@ export interface ProfileOptions {
   ssh?: SshPrefs | null;
   telnet?: TelnetPrefs | null;
   tunnel?: TunnelPrefs | null;
+  vnc?: VncPrefs | null;
 }
+
+/** VNC 连接参数。auth_method: vnc = VNC 密码，none = 无认证。 */
+export interface VncPrefs {
+  auth_method: "vnc" | "none";
+  read_only: boolean;
+  shared: boolean;
+  scale_viewport: boolean;
+  crop_viewport: boolean;
+  quality: number;
+  compression: number;
+}
+
+export type VncState = "connecting" | "ready" | "closed" | "error";
+
+export type VncEvent =
+  | { type: "state"; state: VncState; message: string | null }
+  | { type: "size"; width: number; height: number; name: string }
+  | {
+      type: "copy_rect";
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      src_x: number;
+      src_y: number;
+    }
+  | { type: "clipboard"; text: string; from_server: boolean }
+  | { type: "bell" }
+  | { type: "exit"; reason: string | null };
+
+export type VncInput =
+  | { type: "pointer"; mask: number; x: number; y: number }
+  | { type: "key"; down: boolean; keysym: number };
 
 /** Telnet 按键映射；标准模式不做任何转换。 */
 export interface TelnetPrefs {

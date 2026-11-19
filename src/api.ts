@@ -245,6 +245,41 @@ export function telnetClose(session: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// VNC
+// ---------------------------------------------------------------------------
+
+export async function vncOpen(
+  profileId: string,
+  onEvent: (event: import("./types").VncEvent) => void,
+  onFrame: (frame: ArrayBuffer) => void,
+): Promise<string> {
+  const eventChannel = new Channel<import("./types").VncEvent>();
+  eventChannel.onmessage = onEvent;
+  const frameChannel = new Channel<ArrayBuffer>();
+  frameChannel.onmessage = (message) => {
+    if (message instanceof ArrayBuffer) {
+      onFrame(message);
+    } else if (ArrayBuffer.isView(message)) {
+      const view = message as ArrayBufferView;
+      onFrame(view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength) as ArrayBuffer);
+    }
+  };
+  return invoke("vnc_open", {
+    profileId,
+    onEvent: eventChannel,
+    onFrame: frameChannel,
+  });
+}
+
+export function vncInput(session: string, input: import("./types").VncInput): Promise<void> {
+  return invoke("vnc_input", { session, input });
+}
+
+export function vncClose(session: string): Promise<void> {
+  return invoke("vnc_close", { session });
+}
+
+// ---------------------------------------------------------------------------
 // 端口转发 / 隧道
 // ---------------------------------------------------------------------------
 

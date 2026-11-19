@@ -10,6 +10,7 @@ use crate::serial::SerialManager;
 use crate::session::manager::SshManager;
 use crate::transport::sftp::SftpManager;
 use crate::transport::telnet::TelnetManager;
+use crate::transport::vnc::VncManager;
 use crate::tunnel::TunnelManager;
 use crate::vault::Vault;
 
@@ -22,6 +23,7 @@ pub struct AppState {
     pub serial: SerialManager,
     pub sftp: SftpManager,
     pub telnet: TelnetManager,
+    pub vnc: VncManager,
     pub tunnel: TunnelManager,
     pub http: reqwest::Client,
 }
@@ -47,6 +49,7 @@ impl AppState {
             serial: SerialManager::default(),
             sftp: SftpManager::default(),
             telnet: TelnetManager::default(),
+            vnc: VncManager::default(),
             tunnel: TunnelManager::default(),
             http,
         })

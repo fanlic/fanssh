@@ -11,7 +11,7 @@ use crate::docker::{self, DockerContainer, DockerLogs};
 use crate::ipc::dto::{
     AiChatRequest, AiSettingsInput, AiSettingsView, Nl2CmdResult, RdpHandleDto, RemoteEntry,
     SerialPortInfo, SftpOpenResp, TermEvent, TransferEvent, UpdateEvent, UpdateInfoDto,
-    UpdaterStatusDto,
+    UpdaterStatusDto, VncEvent, VncInputDto,
 };
 use crate::ipc::error::{AppError, AppResult};
 use crate::profile::ImportError;
@@ -207,6 +207,45 @@ pub async fn telnet_input(
 #[tauri::command]
 pub async fn telnet_close(state: State<'_, AppState>, session: SessionId) -> AppResult<()> {
     state.telnet.close(session).await
+}
+
+// ---------------------------------------------------------------------------
+// VNC
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn vnc_open(
+    state: State<'_, AppState>,
+    profile_id: Uuid,
+    on_event: TauriChannel<VncEvent>,
+    on_frame: TauriChannel<tauri::ipc::InvokeResponseBody>,
+) -> AppResult<SessionId> {
+    let profile = state
+        .profiles
+        .get(&profile_id)
+        .ok_or_else(|| AppError::new("profile.not_found", "VNC 配置不存在"))?;
+    if !matches!(profile.protocol, Protocol::Vnc) {
+        return Err(AppError::new(
+            "vnc.invalid_profile",
+            "该配置不是 VNC 协议，无法打开画面",
+        ));
+    }
+    let vault = state.vault.clone();
+    state.vnc.open(profile, vault, on_event, on_frame).await
+}
+
+#[tauri::command]
+pub async fn vnc_input(
+    state: State<'_, AppState>,
+    session: SessionId,
+    input: VncInputDto,
+) -> AppResult<()> {
+    state.vnc.input(session, input).await
+}
+
+#[tauri::command]
+pub async fn vnc_close(state: State<'_, AppState>, session: SessionId) -> AppResult<()> {
+    state.vnc.close(session).await
 }
 
 // ---------------------------------------------------------------------------

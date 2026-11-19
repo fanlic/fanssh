@@ -13,6 +13,7 @@ import { SftpPanel } from "./components/SftpPanel";
 import { TabBar } from "./components/TabBar";
 import { TerminalPane } from "./components/TerminalPane";
 import { TunnelDialog } from "./components/TunnelDialog";
+import { VncPane } from "./components/VncPane";
 import { useAppStore } from "./store";
 import type { DockerContainer, Profile, Protocol } from "./types";
 
@@ -191,7 +192,9 @@ export default function App() {
           ? "隧道"
           : proto === "telnet"
             ? "Telnet"
-            : "RDP";
+            : proto === "vnc"
+              ? "VNC"
+              : "RDP";
 
   const handleNew = () => {
     setEditing(null);
@@ -394,7 +397,7 @@ export default function App() {
 
       <div className="protobar">
         <div className="proto-tabs" role="tablist">
-          {(["ssh", "serial", "rdp", "telnet", "tunnel"] as Protocol[])
+          {(["ssh", "serial", "rdp", "telnet", "vnc", "tunnel"] as Protocol[])
             .filter((item) => item !== "rdp" || platform === "windows")
             .map((item) => (
               <button
@@ -414,7 +417,9 @@ export default function App() {
                     : item === "tunnel"
                       ? "隧道"
                       : item === "telnet"
-                        ? "Telnet"
+                      ? "Telnet"
+                      : item === "vnc"
+                        ? "VNC"
                         : "RDP"}
               </button>
             ))}
@@ -487,14 +492,24 @@ export default function App() {
                   key={tab.id}
                   className={`tab-panes direction-${tab.direction}${tab.id === activeTabId ? "" : " is-hidden"}`}
                 >
-                  {tab.panes.map((pane, index) => (
-                    <TerminalPane
-                      key={pane.key}
-                      tabId={tab.id}
-                      pane={pane}
-                      active={tab.id === activeTabId && index === tab.activePane}
-                    />
-                  ))}
+                  {tab.panes.map((pane, index) => {
+                    const paneProfile = profiles.find((item) => item.id === pane.profileId);
+                    return paneProfile?.protocol === "vnc" ? (
+                      <VncPane
+                        key={pane.key}
+                        tabId={tab.id}
+                        pane={pane}
+                        active={tab.id === activeTabId && index === tab.activePane}
+                      />
+                    ) : (
+                      <TerminalPane
+                        key={pane.key}
+                        tabId={tab.id}
+                        pane={pane}
+                        active={tab.id === activeTabId && index === tab.activePane}
+                      />
+                    );
+                  })}
                 </div>
               ))}
               {tabs.length === 0 && (

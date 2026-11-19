@@ -493,6 +493,7 @@ fn validate(profile: &Profile) -> Result<()> {
         }
         Protocol::Rdp => {}
         Protocol::Telnet => {}
+        Protocol::Vnc => {}
         Protocol::Tunnel => {
             let prefs = profile.tunnel_prefs();
             if prefs.server_id.is_none() {

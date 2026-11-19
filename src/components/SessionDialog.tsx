@@ -22,6 +22,7 @@ import type {
   TunnelKind,
   TunnelPrefs,
   TunnelRoute,
+  VncPrefs,
 } from "../types";
 import { Icon, type IconName } from "./Icon";
 import { useAppStore } from "../store";
@@ -67,6 +68,7 @@ interface FormState {
   rdp: RdpPrefs;
   serial: SerialPrefs;
   telnet: TelnetPrefs;
+  vnc: VncPrefs;
   tunnel: TunnelPrefs;
 }
 
@@ -156,6 +158,16 @@ const DEFAULT_TELNET: TelnetPrefs = {
   mapping_preset: "standard",
 };
 
+const DEFAULT_VNC: VncPrefs = {
+  auth_method: "vnc",
+  read_only: false,
+  shared: true,
+  scale_viewport: true,
+  crop_viewport: false,
+  quality: 6,
+  compression: 2,
+};
+
 const EMPTY: FormState = {
   name: "",
   group: "",
@@ -184,6 +196,7 @@ const EMPTY: FormState = {
   },
   serial: { ...DEFAULT_SERIAL },
   telnet: { ...DEFAULT_TELNET },
+  vnc: { ...DEFAULT_VNC },
   tunnel: { ...DEFAULT_TUNNEL, routes: [] },
 };
 
@@ -221,6 +234,7 @@ function toForm(profile: Profile | null, defaultProtocol: Protocol = "ssh"): For
       rdp: { ...EMPTY.rdp },
       serial: { ...DEFAULT_SERIAL },
       telnet: { ...DEFAULT_TELNET },
+      vnc: { ...DEFAULT_VNC },
       tunnel: { ...DEFAULT_TUNNEL, routes: [] },
     };
   }
@@ -268,6 +282,7 @@ function toForm(profile: Profile | null, defaultProtocol: Protocol = "ssh"): For
     rdp: { ...EMPTY.rdp, ...(profile.options.rdp ?? {}) },
     serial,
     telnet: { ...DEFAULT_TELNET, ...(profile.options.telnet ?? {}) },
+    vnc: { ...DEFAULT_VNC, ...(profile.options.vnc ?? {}) },
     tunnel,
   };
 }
@@ -589,6 +604,43 @@ export function SessionDialog({
           tags,
           options: { telnet: { ...form.telnet } },
         };
+      } else if (form.protocol === "vnc") {
+        if (!form.host.trim()) throw new Error("请填写 VNC 地址");
+        const port = Number(form.port);
+        if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error("端口不合法");
+        let auth: AuthRef = { kind: "none" };
+        if (form.vnc.auth_method === "vnc") {
+          const existing = initial?.auth.kind === "password" ? initial.auth.secret : null;
+          if (form.password.trim()) {
+            const id = await vaultPut(
+              existing,
+              "password",
+              `${form.name.trim()} VNC 密码`,
+              form.password,
+            );
+            auth = { kind: "password", secret: id };
+          } else if (existing) {
+            auth = { kind: "password", secret: existing };
+          } else {
+            throw new Error("VNC 密码认证需要填写密码");
+          }
+        }
+        profile = {
+          id: initial?.id ?? crypto.randomUUID(),
+          name: form.name.trim(),
+          group: form.group.trim() || null,
+          remark: form.remark.trim() || null,
+          protocol: "vnc",
+          target: {
+            host: form.host.trim(),
+            port,
+            user: "",
+          },
+          auth,
+          jump: [],
+          tags,
+          options: { vnc: { ...form.vnc } },
+        };
       } else if (form.protocol === "serial") {
         // 串口配置与凭据无关，不触碰 vault。
         const serial: SerialPrefs = {
@@ -715,6 +767,12 @@ export function SessionDialog({
             { id: "sec-basic", label: "基本信息", icon: "info" },
             { id: "sec-telnet-mapping", label: "按键映射", icon: "term" },
           ]
+        : form.protocol === "vnc"
+        ? [
+            { id: "sec-basic", label: "基础", icon: "info" },
+            { id: "sec-vnc-display", label: "显示", icon: "link" },
+            { id: "sec-vnc-advanced", label: "高级", icon: "gear" },
+          ]
         : form.protocol === "rdp"
         ? [
             { id: "sec-basic", label: "基本信息", icon: "info" },
@@ -812,6 +870,19 @@ export function SessionDialog({
             >
               隧道
             </button>
+            <button
+              role="tab"
+              aria-selected={form.protocol === "vnc"}
+              className={form.protocol === "vnc" ? "is-active" : ""}
+              onClick={() => {
+                update("protocol", "vnc");
+                if (form.port === "22" || form.port === "3389" || form.port === "23") {
+                  update("port", "5900");
+                }
+              }}
+            >
+              VNC
+            </button>
           </div>
 
           {!isWindows && form.protocol === "rdp" && (
@@ -845,14 +916,16 @@ export function SessionDialog({
                 端口 *
                 <input value={form.port} onChange={(e) => update("port", e.target.value)} />
               </label>
-              <label>
-                用户名
-                <input
-                  value={form.user}
-                  onChange={(e) => update("user", e.target.value)}
-                  placeholder={form.protocol === "rdp" ? "Administrator" : "root"}
-                />
-              </label>
+              {form.protocol !== "vnc" && (
+                <label>
+                  用户名
+                  <input
+                    value={form.user}
+                    onChange={(e) => update("user", e.target.value)}
+                    placeholder={form.protocol === "rdp" ? "Administrator" : "root"}
+                  />
+                </label>
+              )}
             </div>
           )}
 
@@ -882,6 +955,153 @@ export function SessionDialog({
                   placeholder="用途、负责人等"
                 />
               </label>
+            </div>
+          )}
+
+          {form.protocol === "vnc" && (
+            <div className="form-grid">
+              <label>
+                认证方式
+                <select
+                  value={form.vnc.auth_method}
+                  onChange={(e) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      vnc: { ...prev.vnc, auth_method: e.target.value as VncPrefs["auth_method"] },
+                    }))
+                  }
+                >
+                  <option value="vnc">VNC 密码</option>
+                  <option value="none">无认证</option>
+                </select>
+                <span className="muted">使用 VNC 密码完成认证。</span>
+              </label>
+              {form.vnc.auth_method === "vnc" && (
+                <label>
+                  密码
+                  <input
+                    type="password"
+                    value={form.password}
+                    onChange={(e) => update("password", e.target.value)}
+                    placeholder={
+                      initial?.auth.kind === "password" ? "留空沿用已保存的密码" : "VNC 登录密码"
+                    }
+                  />
+                </label>
+              )}
+              <label className="span-2">
+                备注
+                <textarea
+                  rows={2}
+                  value={form.remark}
+                  onChange={(e) => update("remark", e.target.value)}
+                  placeholder="用途、负责人等"
+                />
+              </label>
+              <label className="inline span-2">
+                <input
+                  type="checkbox"
+                  checked={form.vnc.read_only}
+                  onChange={(e) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      vnc: { ...prev.vnc, read_only: e.target.checked },
+                    }))
+                  }
+                />
+                只读
+                <span className="muted">（只看画面，不发送键盘和鼠标）</span>
+              </label>
+              <label className="inline span-2">
+                <input
+                  type="checkbox"
+                  checked={form.vnc.shared}
+                  onChange={(e) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      vnc: { ...prev.vnc, shared: e.target.checked },
+                    }))
+                  }
+                />
+                共享连接
+                <span className="muted">（允许其他客户端同时接入）</span>
+              </label>
+            </div>
+          )}
+
+          {form.protocol === "vnc" && (
+            <div id="sec-vnc-display">
+              <div className="section-title">显示</div>
+              <div className="form-grid">
+                <label className="inline span-2">
+                  <input
+                    type="checkbox"
+                    checked={form.vnc.scale_viewport}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        vnc: { ...prev.vnc, scale_viewport: e.target.checked },
+                      }))
+                    }
+                  />
+                  缩放视口
+                  <span className="muted">（关掉后按原始像素显示，可滚动查看）</span>
+                </label>
+                <label className="inline span-2">
+                  <input
+                    type="checkbox"
+                    checked={form.vnc.crop_viewport}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        vnc: { ...prev.vnc, crop_viewport: e.target.checked },
+                      }))
+                    }
+                  />
+                  裁剪视口
+                  <span className="muted">（超出面板的部分裁剪而不是滚动）</span>
+                </label>
+                <label>
+                  画面清晰度（{form.vnc.quality}）
+                  <input
+                    type="range"
+                    min={1}
+                    max={9}
+                    value={form.vnc.quality}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        vnc: { ...prev.vnc, quality: Number(e.target.value) },
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  压缩强度（{form.vnc.compression}）
+                  <input
+                    type="range"
+                    min={1}
+                    max={9}
+                    value={form.vnc.compression}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        vnc: { ...prev.vnc, compression: Number(e.target.value) },
+                      }))
+                    }
+                  />
+                </label>
+              </div>
+            </div>
+          )}
+
+          {form.protocol === "vnc" && (
+            <div id="sec-vnc-advanced">
+              <div className="section-title">高级</div>
+              <p className="muted">
+                当前使用兼容性优先的 Raw / CopyRect 编码，清晰度与压缩强度会随配置保存，
+                供后续启用 Tight 编码时使用。
+              </p>
             </div>
           )}
 

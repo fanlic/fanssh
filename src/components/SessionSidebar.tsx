@@ -19,13 +19,14 @@ interface Props {
   onCollapse?: () => void;
 }
 
-type ProtoFilter = "ssh" | "rdp" | "serial" | "telnet" | "tunnel";
+type ProtoFilter = "ssh" | "rdp" | "serial" | "telnet" | "vnc" | "tunnel";
 
 const PROTO_LABEL: Record<ProtoFilter, string> = {
   ssh: "SSH",
   rdp: "RDP",
   serial: "串口",
   telnet: "Telnet",
+  vnc: "VNC",
   tunnel: "隧道",
 };
 const PROTO_TAG: Record<ProtoFilter, string> = {
@@ -33,9 +34,10 @@ const PROTO_TAG: Record<ProtoFilter, string> = {
   rdp: "RDP",
   serial: "SER",
   telnet: "TEL",
+  vnc: "VNC",
   tunnel: "TUN",
 };
-const ALL_PROTOS: ProtoFilter[] = ["ssh", "serial", "rdp", "telnet", "tunnel"];
+const ALL_PROTOS: ProtoFilter[] = ["ssh", "serial", "rdp", "telnet", "vnc", "tunnel"];
 
 export function SessionSidebar({
   onNew,
@@ -63,6 +65,7 @@ export function SessionSidebar({
     serial: true,
     rdp: true,
     telnet: true,
+    vnc: true,
     tunnel: true,
   });
   // 顶部协议 tab 切换时，把侧栏过滤同步为单协议；底部勾选菜单仍可再改。
@@ -73,6 +76,7 @@ export function SessionSidebar({
       serial: proto === "serial",
       rdp: proto === "rdp",
       telnet: proto === "telnet",
+      vnc: proto === "vnc",
       tunnel: proto === "tunnel",
     });
   }, [proto]);
@@ -144,7 +148,9 @@ export function SessionSidebar({
                 ? "隧道 tunnel 端口转发"
                 : profile.protocol === "telnet"
                   ? "telnet 明文"
-                  : "ssh"
+                  : profile.protocol === "vnc"
+                    ? "vnc 远程桌面 rfb"
+                    : "ssh"
           ).includes(keyword) ||
           (profile.protocol === "tunnel"
             ? `${profile.options.tunnel?.routes.length ?? 0} 条路由`
@@ -168,6 +174,7 @@ export function SessionSidebar({
       rdp: matches.filter((profile) => profile.protocol === "rdp").length,
       serial: matches.filter((profile) => profile.protocol === "serial").length,
       telnet: matches.filter((profile) => profile.protocol === "telnet").length,
+      vnc: matches.filter((profile) => profile.protocol === "vnc").length,
       tunnel: matches.filter((profile) => profile.protocol === "tunnel").length,
     }),
     [matches],
@@ -228,7 +235,7 @@ export function SessionSidebar({
   };
 
   const selectAll = () =>
-    setEnabled({ ssh: true, serial: true, rdp: true, telnet: true, tunnel: true });
+    setEnabled({ ssh: true, serial: true, rdp: true, telnet: true, vnc: true, tunnel: true });
 
   const openContextMenu = (event: ReactMouseEvent) => {
     event.preventDefault();
@@ -328,7 +335,9 @@ export function SessionSidebar({
                               ? "link"
                               : profile.protocol === "tunnel"
                                 ? "transfer"
-                                : "term"
+                                : profile.protocol === "vnc"
+                                  ? "link"
+                                  : "term"
                         }
                         size={13}
                       />
