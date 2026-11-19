@@ -5,7 +5,7 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::ai;
-use crate::app::settings::AiSettingsFile;
+use crate::app::settings::{AiSettingsFile, UiSettings};
 use crate::app::AppState;
 use crate::docker::{self, DockerContainer, DockerLogs};
 use crate::ipc::dto::{
@@ -490,6 +490,47 @@ pub async fn ai_settings_save(
         .save_ai(file)
         .map_err(|e| AppError::new("ai.save_failed", format!("{e:#}")))?;
     Ok(to_view(saved, &*state))
+}
+
+// ---------------------------------------------------------------------------
+// 界面设置（主题 / 终端 / 快捷键）
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn ui_settings_get(state: State<'_, AppState>) -> AppResult<UiSettings> {
+    Ok(state.settings.ui())
+}
+
+#[tauri::command]
+pub async fn ui_settings_save(
+    state: State<'_, AppState>,
+    settings: UiSettings,
+) -> AppResult<UiSettings> {
+    let mut settings = settings;
+    // 后端做边界约束，避免前端写入极端值破坏终端渲染。
+    settings.terminal.font_size = settings.terminal.font_size.clamp(10, 32);
+    settings.terminal.line_height = settings.terminal.line_height.clamp(0.8, 2.0);
+    settings.terminal.letter_spacing = settings.terminal.letter_spacing.clamp(-2.0, 6.0);
+    settings.terminal.scrollback = settings.terminal.scrollback.clamp(100, 100_000);
+    if !matches!(
+        settings.terminal.cursor_style.as_str(),
+        "bar" | "block" | "underline"
+    ) {
+        settings.terminal.cursor_style = "bar".to_string();
+    }
+    if !matches!(
+        settings.terminal.inactive_cursor_style.as_str(),
+        "none" | "outline" | "block" | "bar" | "underline"
+    ) {
+        settings.terminal.inactive_cursor_style = "none".to_string();
+    }
+    if !matches!(settings.terminal.right_click.as_str(), "menu" | "paste") {
+        settings.terminal.right_click = "menu".to_string();
+    }
+    state
+        .settings
+        .save_ui(settings)
+        .map_err(|e| AppError::new("ui.save_failed", format!("{e:#}")))
 }
 
 #[tauri::command]

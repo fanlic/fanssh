@@ -64,6 +64,8 @@ pub fn run() {
             sftp_close,
             ai_settings_get,
             ai_settings_save,
+            ui_settings_get,
+            ui_settings_save,
             ai_chat,
             ai_nl2cmd,
             rdp_launch,

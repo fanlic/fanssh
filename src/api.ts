@@ -16,6 +16,7 @@ import type {
   UpdateEvent,
   UpdateInfo,
   UpdaterStatus,
+  UiSettings,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -307,6 +308,18 @@ export function tunnelActive(): Promise<string[]> {
 
 export function rdpLaunch(profileId: string): Promise<RdpHandleDto> {
   return invoke("rdp_launch", { profileId });
+}
+
+// ---------------------------------------------------------------------------
+// 界面设置（主题 / 终端 / 快捷键）
+// ---------------------------------------------------------------------------
+
+export function uiSettingsGet(): Promise<UiSettings> {
+  return invoke("ui_settings_get");
+}
+
+export function uiSettingsSave(settings: UiSettings): Promise<UiSettings> {
+  return invoke("ui_settings_save", { settings });
 }
 
 // ---------------------------------------------------------------------------

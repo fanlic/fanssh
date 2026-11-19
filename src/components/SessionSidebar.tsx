@@ -317,6 +317,17 @@ export function SessionSidebar({
                   <div
                     key={profile.id}
                     className={`session${activeProfileIds.has(profile.id) ? " is-open" : ""}`}
+                    draggable
+                    onDragStart={(event) => {
+                      // 行内操作按钮不触发拖拽，避免误把连接拖走。
+                      if ((event.target as HTMLElement).closest(".s-actions")) {
+                        event.preventDefault();
+                        return;
+                      }
+                      event.dataTransfer.setData("application/x-fanssh-profile", profile.id);
+                      event.dataTransfer.setData("text/plain", profile.name);
+                      event.dataTransfer.effectAllowed = "copy";
+                    }}
                     onDoubleClick={() => handleConnect(profile)}
                     title={`双击${
                       profile.protocol === "tunnel"

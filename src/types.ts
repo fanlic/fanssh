@@ -328,3 +328,56 @@ export interface AppErrorShape {
   detail?: string | null;
   retryable?: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// 界面设置（与 Rust UiSettings 字段保持一致，snake_case）
+// ---------------------------------------------------------------------------
+
+export interface AppearanceSettings {
+  preset: string;
+  theme_color: string;
+  background_color: string;
+  nav_color: string;
+  follow_system: boolean;
+  system_font: string;
+}
+
+export type TerminalWeight = "normal" | "300" | "400" | "500" | "600" | "bold";
+export type CursorStyle = "bar" | "block" | "underline";
+export type InactiveCursorStyle = "none" | "outline" | "block" | "bar" | "underline";
+export type QuickInputMode = "floating" | "hidden" | "fixed";
+export type RightClickBehavior = "menu" | "paste";
+
+export interface TerminalUiSettings {
+  font_family: string;
+  normal_weight: string;
+  bold_weight: string;
+  scrollback: number;
+  font_size: number;
+  line_height: number;
+  letter_spacing: number;
+  cursor_blink: boolean;
+  cursor_style: CursorStyle | string;
+  inactive_cursor_style: InactiveCursorStyle | string;
+  quick_input: QuickInputMode | string;
+  wheel_zoom: boolean;
+  copy_on_select: boolean;
+  right_click: RightClickBehavior | string;
+}
+
+export interface ShortcutSettings {
+  open_settings: string;
+  global_search: string;
+  next_tab: string;
+  prev_tab: string;
+  close_tab: string;
+  zoom_in: string;
+  zoom_out: string;
+  toggle_sidebar: string;
+}
+
+export interface UiSettings {
+  appearance: AppearanceSettings;
+  terminal: TerminalUiSettings;
+  shortcuts: ShortcutSettings;
+}

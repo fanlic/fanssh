@@ -28,31 +28,41 @@ import {
 } from "../lib/commandSuggest";
 import { terminalRegistry } from "../lib/terminalRegistry";
 import { useAppStore, type PaneState } from "../store";
+import { useUiSettingsStore } from "../uiSettings";
 import type { TermEvent } from "../types";
 import { Icon } from "./Icon";
 
-const THEME = {
-  background: "#0e1019",
-  foreground: "#ffffff",
-  cursor: "#3dbe71",
-  selectionBackground: "rgba(61, 190, 113, 0.25)",
-  black: "#1a1a1a",
-  red: "#ff5c5c",
-  green: "#3dbe71",
-  yellow: "#d7a54a",
-  blue: "#6a9fb5",
-  magenta: "#b3a4d8",
-  cyan: "#56d4dd",
-  white: "#d6d6d6",
-  brightBlack: "#6e6e6e",
-  brightRed: "#ff8a8a",
-  brightGreen: "#5fd88c",
-  brightYellow: "#e8c879",
-  brightBlue: "#8fbccf",
-  brightMagenta: "#cbbde8",
-  brightCyan: "#8fe3e8",
-  brightWhite: "#ffffff",
-};
+function buildTheme(accent: string) {
+  return {
+    background: "#0e1019",
+    foreground: "#ffffff",
+    cursor: accent,
+    selectionBackground: "rgba(61, 190, 113, 0.25)",
+    black: "#1a1a1a",
+    red: "#ff5c5c",
+    green: accent,
+    yellow: "#d7a54a",
+    blue: "#6a9fb5",
+    magenta: "#b3a4d8",
+    cyan: "#56d4dd",
+    white: "#d6d6d6",
+    brightBlack: "#6e6e6e",
+    brightRed: "#ff8a8a",
+    brightGreen: "#5fd88c",
+    brightYellow: "#e8c879",
+    brightBlue: "#8fbccf",
+    brightMagenta: "#cbbde8",
+    brightCyan: "#8fe3e8",
+    brightWhite: "#ffffff",
+  };
+}
+
+/** xterm 的字重只接受 normal/bold 或数字，设置里存的是字符串。 */
+function fontWeight(value: string): "normal" | "bold" | number {
+  const num = Number(value);
+  if (value.trim() !== "" && Number.isFinite(num)) return num;
+  return value === "bold" ? "bold" : "normal";
+}
 
 interface Props {
   tabId: string;
@@ -102,6 +112,8 @@ export function TerminalPane({ tabId, pane, active }: Props) {
   const setPaneTitle = useAppStore((s) => s.setPaneTitle);
   const setActivePane = useAppStore((s) => s.setActivePane);
   const closePane = useAppStore((s) => s.closePane);
+  const liveTerminal = useUiSettingsStore((s) => s.settings.terminal);
+  const liveThemeColor = useUiSettingsStore((s) => s.settings.appearance.theme_color);
   const profile = useAppStore((s) => s.profiles.find((item) => item.id === pane.profileId));
   const isSerial = profile?.protocol === "serial";
   const isTelnet = profile?.protocol === "telnet";
@@ -119,14 +131,24 @@ export function TerminalPane({ tabId, pane, active }: Props) {
     if (!host) return;
     disposedRef.current = false;
 
+    const ui = useUiSettingsStore.getState().settings;
     const term = new Terminal({
-      fontFamily:
-        '"Cascadia Mono", "JetBrains Mono", Consolas, "Noto Sans Mono CJK SC", monospace',
-      fontSize: 13,
-      lineHeight: 1.4,
-      cursorBlink: true,
-      scrollback: 8000,
-      theme: THEME,
+      fontFamily: ui.terminal.font_family,
+      fontWeight: fontWeight(ui.terminal.normal_weight),
+      fontWeightBold: fontWeight(ui.terminal.bold_weight),
+      fontSize: ui.terminal.font_size,
+      lineHeight: ui.terminal.line_height,
+      letterSpacing: ui.terminal.letter_spacing,
+      cursorBlink: ui.terminal.cursor_blink,
+      cursorStyle: ui.terminal.cursor_style as "bar" | "block" | "underline",
+      cursorInactiveStyle: ui.terminal.inactive_cursor_style as
+        | "none"
+        | "outline"
+        | "block"
+        | "bar"
+        | "underline",
+      scrollback: ui.terminal.scrollback,
+      theme: buildTheme(ui.appearance.theme_color),
       allowTransparency: false,
     });
     const fit = new FitAddon();
@@ -141,6 +163,28 @@ export function TerminalPane({ tabId, pane, active }: Props) {
     termRef.current = term;
     fitRef.current = fit;
     terminalRegistry.register(pane.key, term);
+
+    // 按住 Ctrl 滚动滚轮缩放当前面板字号（可在设置里关闭）。
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey) return;
+      if (!useUiSettingsStore.getState().settings.terminal.wheel_zoom) return;
+      event.preventDefault();
+      const current = term.options.fontSize ?? 16;
+      term.options.fontSize = Math.max(10, Math.min(32, current + (event.deltaY < 0 ? 1 : -1)));
+      try {
+        fit.fit();
+      } catch {
+        // 布局尚未完成时忽略
+      }
+    };
+    host.addEventListener("wheel", onWheel, { passive: false });
+
+    // 选中即复制：可选行为，默认关闭，不影响 Ctrl+C。
+    const selectionSub = term.onSelectionChange(() => {
+      if (!useUiSettingsStore.getState().settings.terminal.copy_on_select) return;
+      const selection = term.getSelection();
+      if (selection) void navigator.clipboard.writeText(selection).catch(() => undefined);
+    });
 
     const doFit = () => {
       try {
@@ -562,6 +606,8 @@ export function TerminalPane({ tabId, pane, active }: Props) {
       if (seedTimer) window.clearTimeout(seedTimer);
       window.cancelAnimationFrame(raf);
       observer.disconnect();
+      host.removeEventListener("wheel", onWheel);
+      selectionSub.dispose();
       completionsRef.current = [];
       setCompletions([]);
       setCompletionPos(null);
@@ -595,6 +641,33 @@ export function TerminalPane({ tabId, pane, active }: Props) {
     }, 30);
     return () => window.clearTimeout(timer);
   }, [active]);
+
+  // 设置页修改字体/字号/行高/光标后，实时作用到已打开且仍存活的 xterm。
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.fontFamily = liveTerminal.font_family;
+    term.options.fontWeight = fontWeight(liveTerminal.normal_weight);
+    term.options.fontWeightBold = fontWeight(liveTerminal.bold_weight);
+    term.options.fontSize = liveTerminal.font_size;
+    term.options.lineHeight = liveTerminal.line_height;
+    term.options.letterSpacing = liveTerminal.letter_spacing;
+    term.options.cursorBlink = liveTerminal.cursor_blink;
+    term.options.cursorStyle = liveTerminal.cursor_style as "bar" | "block" | "underline";
+    term.options.cursorInactiveStyle = liveTerminal.inactive_cursor_style as
+      | "none"
+      | "outline"
+      | "block"
+      | "bar"
+      | "underline";
+    term.options.scrollback = liveTerminal.scrollback;
+    term.options.theme = buildTheme(liveThemeColor);
+    try {
+      fitRef.current?.fit();
+    } catch {
+      /* ignore */
+    }
+  }, [liveTerminal, liveThemeColor]);
 
   const showOverlay = pane.status === "connecting" || pane.status === "closed" || pane.status === "error";
 
@@ -685,8 +758,8 @@ export function TerminalPane({ tabId, pane, active }: Props) {
       const term = termRef.current;
       if (!term) return;
       const delta = Number((event as CustomEvent<number>).detail) || 0;
-      const current = term.options.fontSize ?? 13;
-      term.options.fontSize = Math.max(10, Math.min(22, current + delta));
+      const current = term.options.fontSize ?? 16;
+      term.options.fontSize = Math.max(10, Math.min(32, current + delta));
       try {
         fitRef.current?.fit();
       } catch {
@@ -701,6 +774,11 @@ export function TerminalPane({ tabId, pane, active }: Props) {
   /** 打开终端右键菜单；菜单项顺序参考 Xterminal 终端右键菜单。 */
   const openMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
     event.preventDefault();
+    // 右键行为可在设置中改为直接粘贴。
+    if (useUiSettingsStore.getState().settings.terminal.right_click === "paste") {
+      void pasteClipboard();
+      return;
+    }
     const term = termRef.current;
     const selection = term?.getSelection() ?? "";
     const rect = event.currentTarget.closest(".terminal-pane")?.getBoundingClientRect();
