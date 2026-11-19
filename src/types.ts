@@ -182,6 +182,24 @@ export interface DockerLogs {
   truncated: boolean;
 }
 
+/** 服务器监控：一次采样的快照。容量单位为字节，速率为字节/秒。 */
+export interface HostMetrics {
+  ts: number;
+  uptime: number;
+  load1: number;
+  load5: number;
+  load15: number;
+  cpu: { usage: number; cores: number[] };
+  mem: { total: number; used: number; cached: number; free: number };
+  disks: Array<{ mount: string; total: number; used: number }>;
+  net: { rx_bps: number; tx_bps: number };
+  platform: string;
+}
+
+export type MonitorEvent =
+  | { type: "metrics"; metrics: HostMetrics }
+  | { type: "error"; code: string; message: string };
+
 export interface Profile {
   id: string;
   name: string;

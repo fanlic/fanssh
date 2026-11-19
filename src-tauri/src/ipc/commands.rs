@@ -14,6 +14,7 @@ use crate::ipc::dto::{
     UpdateEvent, UpdateInfoDto, UpdaterStatusDto, VncEvent, VncInputDto,
 };
 use crate::ipc::error::{AppError, AppResult};
+use crate::monitor::MonitorEvent;
 use crate::profile::ImportError;
 use crate::serial::SerialManager;
 use crate::session::model::{AuthRef, Profile, Protocol, SecretKind, SessionId};
@@ -116,6 +117,28 @@ pub async fn docker_logs(
     tail: Option<u32>,
 ) -> AppResult<DockerLogs> {
     docker::logs(&state.ssh, session, &container, tail.unwrap_or(500)).await
+}
+
+// ---------------------------------------------------------------------------
+// 服务器监控（只读 /proc 采样，不在远端写文件）
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn monitor_start(
+    state: State<'_, AppState>,
+    session: SessionId,
+    on_event: TauriChannel<MonitorEvent>,
+) -> AppResult<()> {
+    state
+        .monitor
+        .start(state.ssh.clone(), session, on_event)
+        .await
+}
+
+#[tauri::command]
+pub async fn monitor_stop(state: State<'_, AppState>, session: SessionId) -> AppResult<()> {
+    state.monitor.stop(session).await;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

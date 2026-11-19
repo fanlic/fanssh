@@ -5,6 +5,7 @@ import type {
   ChatMessage,
   DockerContainer,
   DockerLogs,
+  MonitorEvent,
   Nl2CmdResult,
   Profile,
   RdpHandleDto,
@@ -75,6 +76,23 @@ export function termAuthRespond(
 /** 读取用户选择的本地文件（私钥）。 */
 export function readTextFile(path: string): Promise<string> {
   return invoke("read_text_file", { path });
+}
+
+// ---------------------------------------------------------------------------
+// 服务器监控（复用当前 SSH 会话，只读采样）
+// ---------------------------------------------------------------------------
+
+export async function monitorStart(
+  session: string,
+  onEvent: (event: MonitorEvent) => void,
+): Promise<void> {
+  const channel = new Channel<MonitorEvent>();
+  channel.onmessage = onEvent;
+  return invoke("monitor_start", { session, onEvent: channel });
+}
+
+export function monitorStop(session: string): Promise<void> {
+  return invoke("monitor_stop", { session });
 }
 
 // ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ import { AiSidebar } from "./components/AiSidebar";
 import { ActivityBar } from "./components/ActivityBar";
 import { DockerPanel } from "./components/DockerPanel";
 import { Icon } from "./components/Icon";
+import { MonitorPanel } from "./components/MonitorPanel";
 import { PassphraseDialog } from "./components/PassphraseDialog";
 import { SessionDialog } from "./components/SessionDialog";
 import { SessionSidebar } from "./components/SessionSidebar";
@@ -59,6 +60,7 @@ export default function App() {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [dockerOpen, setDockerOpen] = useState(false);
+  const [monitorOpen, setMonitorOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [version, setVersion] = useState("1.0.6");
   const [platform, setPlatform] = useState("windows");
@@ -368,6 +370,10 @@ export default function App() {
     setDockerOpen(true);
   };
 
+  const handleMonitorToggle = () => {
+    setMonitorOpen((value) => !value);
+  };
+
   /** 进入容器：新开 SSH 终端 Tab，把命令写进输入行但不回车。 */
   const handleDockerShell = (container: DockerContainer) => {
     if (!activeProfile || activeProfile.protocol !== "ssh") {
@@ -563,9 +569,11 @@ export default function App() {
         <ActivityBar
           sftpOpen={sftpProfileId !== null}
           dockerOpen={dockerOpen}
+          monitorOpen={monitorOpen}
           aiOpen={aiOpen}
           onToggleSftp={handleSftpToggle}
           onToggleDocker={handleDockerToggle}
+          onToggleMonitor={handleMonitorToggle}
           onToggleAi={toggleAi}
         />
 
@@ -691,6 +699,17 @@ export default function App() {
                 </div>
               )}
             </div>
+
+            {monitorOpen && (
+              <MonitorPanel
+                profile={activeProfile}
+                sessionId={
+                  activeProfile?.protocol === "ssh" ? (activePane?.sessionId ?? null) : null
+                }
+                paneReady={activePane?.status === "ready"}
+                onClose={() => setMonitorOpen(false)}
+              />
+            )}
           </div>
         </main>
 

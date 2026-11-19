@@ -4503,3 +4503,194 @@ body.is-resizing {
   background: var(--hover);
   color: var(--text);
 }
+
+/* ---------------------------------------------------------------------------
+   服务器监控面板（工作区右侧，卡片化）
+--------------------------------------------------------------------------- */
+.monitor-panel {
+  border-right: 0;
+  border-left: 1px solid var(--border);
+}
+.monitor-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mon-card {
+  flex: none;
+  padding: 9px 10px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  background: var(--panel);
+}
+.mon-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.mon-card-title {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.mon-card-value {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 20px;
+  color: var(--text);
+}
+.mon-uptime {
+  margin-top: 4px;
+  font-size: 20px;
+  line-height: 26px;
+}
+.mon-spark {
+  display: block;
+  width: 100%;
+  height: 40px;
+  margin: 7px 0 3px;
+  border-radius: var(--radius-1);
+  background: var(--code-bg);
+}
+.mon-meta {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--text-faint);
+}
+.mon-bar {
+  height: 4px;
+  margin-top: 6px;
+  border-radius: 2px;
+  background: var(--input-bg);
+  overflow: hidden;
+}
+.mon-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width var(--dur-base) linear, background-color var(--dur-base) linear;
+}
+.mon-bar-fill.is-warn {
+  background: var(--warning);
+}
+.mon-bar-fill.is-danger {
+  background: var(--danger);
+}
+.mon-cores {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 28px;
+  margin-top: 8px;
+}
+.mon-core {
+  flex: 1 1 0;
+  min-width: 2px;
+  max-width: 12px;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  border-radius: 1px;
+  background: var(--input-bg);
+  overflow: hidden;
+}
+.mon-core > span {
+  width: 100%;
+  border-radius: 1px;
+  background: var(--accent);
+  transition: height var(--dur-base) linear;
+}
+.mon-core.is-warn > span {
+  background: var(--warning);
+}
+.mon-core.is-danger > span {
+  background: var(--danger);
+}
+.mon-net {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+.mon-net > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.mon-net-label {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.mon-net-value {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+}
+.mon-disks {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin-top: 6px;
+}
+.mon-disk-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.mon-disk-mount {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+}
+.mon-disks .mon-meta {
+  margin-top: 2px;
+}
+.mon-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px 18px;
+  text-align: center;
+  color: var(--text-dim);
+}
+.mon-empty-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.mon-empty-desc {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-faint);
+}
+.mon-hint {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--warning);
+}
+.mon-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 2px 4px;
+  font-size: 10px;
+  color: var(--text-faint);
+}

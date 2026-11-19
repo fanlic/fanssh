@@ -3,9 +3,11 @@ import { Icon } from "./Icon";
 interface Props {
   sftpOpen: boolean;
   dockerOpen: boolean;
+  monitorOpen: boolean;
   aiOpen: boolean;
   onToggleSftp: () => void;
   onToggleDocker: () => void;
+  onToggleMonitor: () => void;
   onToggleAi: () => void;
 }
 
@@ -13,9 +15,11 @@ interface Props {
 export function ActivityBar({
   sftpOpen,
   dockerOpen,
+  monitorOpen,
   aiOpen,
   onToggleSftp,
   onToggleDocker,
+  onToggleMonitor,
   onToggleAi,
 }: Props) {
   return (
@@ -35,6 +39,14 @@ export function ActivityBar({
         onClick={onToggleDocker}
       >
         <Icon name="docker" size={17} />
+      </button>
+      <button
+        className={`ab-btn${monitorOpen ? " is-active" : ""}`}
+        title={monitorOpen ? "关闭服务器监控" : "打开服务器监控"}
+        aria-pressed={monitorOpen}
+        onClick={onToggleMonitor}
+      >
+        <Icon name="pulse" size={17} />
       </button>
       <button
         className={`ab-btn${aiOpen ? " is-active" : ""}`}

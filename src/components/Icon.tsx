@@ -32,7 +32,8 @@ export type IconName =
   | "trash"
   | "edit"
   | "filter"
-  | "docker";
+  | "docker"
+  | "pulse";
 
 const PATHS: Record<IconName, JSX.Element> = {
   term: (
@@ -137,6 +138,7 @@ const PATHS: Record<IconName, JSX.Element> = {
       <path d="M13.5 6.5V11L8 13.5" />
     </>
   ),
+  pulse: <path d="M1.5 8h3l1.8-4.2L9 12.2l1.8-4.2H14.5" />,
 };
 
 interface Props extends Omit<SVGProps<SVGSVGElement>, "name"> {

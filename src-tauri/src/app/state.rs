@@ -5,6 +5,7 @@ use std::time::Duration;
 use tauri::Manager;
 
 use crate::app::settings::SettingsStore;
+use crate::monitor::MonitorManager;
 use crate::profile::ProfileStore;
 use crate::serial::SerialManager;
 use crate::session::manager::SshManager;
@@ -25,6 +26,7 @@ pub struct AppState {
     pub telnet: TelnetManager,
     pub vnc: VncManager,
     pub tunnel: TunnelManager,
+    pub monitor: MonitorManager,
     pub http: reqwest::Client,
 }
 
@@ -51,6 +53,7 @@ impl AppState {
             telnet: TelnetManager::default(),
             vnc: VncManager::default(),
             tunnel: TunnelManager::default(),
+            monitor: MonitorManager::default(),
             http,
         })
     }

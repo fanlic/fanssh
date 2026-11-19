@@ -3,6 +3,7 @@ mod app;
 mod crypto;
 mod docker;
 mod ipc;
+mod monitor;
 mod profile;
 mod serial;
 mod session;
@@ -37,6 +38,8 @@ pub fn run() {
             read_text_file,
             docker_containers,
             docker_logs,
+            monitor_start,
+            monitor_stop,
             serial_list_ports,
             serial_open,
             serial_input,
