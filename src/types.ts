@@ -241,8 +241,34 @@ export interface SftpOpenResp {
   home: string;
 }
 
+export interface SftpTextFile {
+  content: string;
+  mtime: number | null;
+  mode: number | null;
+  size: number;
+}
+
+export interface SftpOpResult {
+  path: string;
+  ok: boolean;
+  error: string | null;
+}
+
+export type SftpConflict = "overwrite" | "skip" | "rename";
+
 export type TransferEvent =
-  | { type: "start"; id: string; name: string; direction: string; total: number }
+  | {
+      type: "start";
+      id: string;
+      name: string;
+      direction: string;
+      total: number;
+      resumed: number;
+      remote_path: string;
+      local_path: string | null;
+      conflict: string;
+    }
+  | { type: "skipped"; id: string; name: string; direction: string }
   | {
       type: "progress";
       id: string;

@@ -10,7 +10,10 @@ import type {
   RdpHandleDto,
   RemoteEntry,
   SerialPortInfo,
+  SftpConflict,
+  SftpOpResult,
   SftpOpenResp,
+  SftpTextFile,
   TermEvent,
   TransferEvent,
   UpdateEvent,
@@ -168,6 +171,8 @@ export async function sftpUpload(
   sftpId: string,
   localPaths: string[],
   remoteDir: string,
+  conflict: SftpConflict,
+  restart: boolean,
   onEvent: (event: TransferEvent) => void,
 ): Promise<void> {
   const channel = new Channel<TransferEvent>();
@@ -176,6 +181,8 @@ export async function sftpUpload(
     sftpId,
     localPaths,
     remoteDir,
+    conflict,
+    restart,
     onEvent: channel,
   });
 }
@@ -184,6 +191,8 @@ export async function sftpDownload(
   sftpId: string,
   remotePath: string,
   localPath: string,
+  conflict: SftpConflict,
+  restart: boolean,
   onEvent: (event: TransferEvent) => void,
 ): Promise<void> {
   const channel = new Channel<TransferEvent>();
@@ -192,8 +201,54 @@ export async function sftpDownload(
     sftpId,
     remotePath,
     localPath,
+    conflict,
+    restart,
     onEvent: channel,
   });
+}
+
+export function sftpRename(
+  sftpId: string,
+  from: string,
+  to: string,
+): Promise<void> {
+  return invoke("sftp_rename", { sftpId, from, to });
+}
+
+export function sftpMkdir(sftpId: string, path: string): Promise<void> {
+  return invoke("sftp_mkdir", { sftpId, path });
+}
+
+export function sftpRemove(
+  sftpId: string,
+  paths: string[],
+): Promise<SftpOpResult[]> {
+  return invoke("sftp_remove", { sftpId, paths });
+}
+
+export function sftpReadText(
+  sftpId: string,
+  path: string,
+): Promise<SftpTextFile> {
+  return invoke("sftp_read_text", { sftpId, path });
+}
+
+export function sftpWriteText(
+  sftpId: string,
+  path: string,
+  content: string,
+  expectedMtime: number | null,
+): Promise<SftpTextFile> {
+  return invoke("sftp_write_text", {
+    sftpId,
+    path,
+    content,
+    expectedMtime,
+  });
+}
+
+export function sftpLocalExists(path: string): Promise<boolean> {
+  return invoke("sftp_local_exists", { path });
 }
 
 export function sftpClose(sftpId: string): Promise<void> {

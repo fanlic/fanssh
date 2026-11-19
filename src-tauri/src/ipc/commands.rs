@@ -10,8 +10,8 @@ use crate::app::AppState;
 use crate::docker::{self, DockerContainer, DockerLogs};
 use crate::ipc::dto::{
     AiChatRequest, AiSettingsInput, AiSettingsView, Nl2CmdResult, RdpHandleDto, RemoteEntry,
-    SerialPortInfo, SftpOpenResp, TermEvent, TransferEvent, UpdateEvent, UpdateInfoDto,
-    UpdaterStatusDto, VncEvent, VncInputDto,
+    SerialPortInfo, SftpOpResult, SftpOpenResp, SftpTextFile, TermEvent, TransferEvent,
+    UpdateEvent, UpdateInfoDto, UpdaterStatusDto, VncEvent, VncInputDto,
 };
 use crate::ipc::error::{AppError, AppResult};
 use crate::profile::ImportError;
@@ -412,12 +412,21 @@ pub async fn sftp_upload(
     sftp_id: Uuid,
     local_paths: Vec<String>,
     remote_dir: String,
+    conflict: String,
+    restart: bool,
     on_event: TauriChannel<TransferEvent>,
 ) -> AppResult<()> {
     let sftp = state.sftp.clone();
-    sftp.upload(sftp_id, local_paths, remote_dir, on_event)
-        .await
-        .map_err(AppError::from)
+    sftp.upload(
+        sftp_id,
+        local_paths,
+        remote_dir,
+        conflict,
+        restart,
+        on_event,
+    )
+    .await
+    .map_err(AppError::from)
 }
 
 #[tauri::command]
@@ -426,12 +435,83 @@ pub async fn sftp_download(
     sftp_id: Uuid,
     remote_path: String,
     local_path: String,
+    conflict: String,
+    restart: bool,
     on_event: TauriChannel<TransferEvent>,
 ) -> AppResult<()> {
     let sftp = state.sftp.clone();
-    sftp.download(sftp_id, remote_path, local_path, on_event)
+    sftp.download(
+        sftp_id,
+        remote_path,
+        local_path,
+        conflict,
+        restart,
+        on_event,
+    )
+    .await
+    .map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn sftp_rename(
+    state: State<'_, AppState>,
+    sftp_id: Uuid,
+    from: String,
+    to: String,
+) -> AppResult<()> {
+    let sftp = state.sftp.clone();
+    sftp.rename(sftp_id, &from, &to)
         .await
         .map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn sftp_mkdir(state: State<'_, AppState>, sftp_id: Uuid, path: String) -> AppResult<()> {
+    let sftp = state.sftp.clone();
+    sftp.mkdir(sftp_id, &path).await.map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn sftp_remove(
+    state: State<'_, AppState>,
+    sftp_id: Uuid,
+    paths: Vec<String>,
+) -> AppResult<Vec<SftpOpResult>> {
+    let sftp = state.sftp.clone();
+    sftp.remove_many(sftp_id, paths)
+        .await
+        .map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn sftp_read_text(
+    state: State<'_, AppState>,
+    sftp_id: Uuid,
+    path: String,
+) -> AppResult<SftpTextFile> {
+    let sftp = state.sftp.clone();
+    sftp.read_text(sftp_id, &path)
+        .await
+        .map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn sftp_write_text(
+    state: State<'_, AppState>,
+    sftp_id: Uuid,
+    path: String,
+    content: String,
+    expected_mtime: Option<u32>,
+) -> AppResult<SftpTextFile> {
+    let sftp = state.sftp.clone();
+    sftp.write_text(sftp_id, &path, &content, expected_mtime)
+        .await
+        .map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn sftp_local_exists(path: String) -> AppResult<bool> {
+    Ok(std::path::Path::new(&path).exists())
 }
 
 #[tauri::command]

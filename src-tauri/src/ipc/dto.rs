@@ -127,6 +127,15 @@ pub enum TransferEvent {
         name: String,
         direction: String,
         total: u64,
+        resumed: u64,
+        remote_path: String,
+        local_path: Option<String>,
+        conflict: String,
+    },
+    Skipped {
+        id: Uuid,
+        name: String,
+        direction: String,
     },
     Progress {
         id: Uuid,
@@ -165,6 +174,21 @@ pub struct RemoteEntry {
 pub struct SftpOpenResp {
     pub sftp_id: Uuid,
     pub home: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SftpTextFile {
+    pub content: String,
+    pub mtime: Option<u32>,
+    pub mode: Option<u32>,
+    pub size: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SftpOpResult {
+    pub path: String,
+    pub ok: bool,
+    pub error: Option<String>,
 }
 
 /// 系统串口枚举结果。`description` 带上厂商/产品/序列号，便于区分同型号设备。
