@@ -9,8 +9,9 @@ use tokio::time::{interval, MissedTickBehavior};
 
 use crate::ipc::dto::{SessionState, TermEvent};
 use crate::ipc::error::{AppError, AppResult};
-use crate::session::model::{Profile, SessionId};
-use crate::transport::ssh::{connect_profile, ClientHandler, ConnectedSsh};
+use crate::known_hosts::KnownHosts;
+use crate::session::model::{Profile, SessionId, SshPrefs};
+use crate::transport::ssh::{connect_profile, AuthPrompts, AuthUi, ClientHandler, ConnectedSsh};
 use crate::vault::Vault;
 
 enum TermInput {
@@ -34,6 +35,10 @@ pub struct SshManager {
     sessions: Arc<Mutex<HashMap<SessionId, mpsc::Sender<TermInput>>>>,
     /// 活跃 SSH 连接的句柄，供 Docker 等复用同一条连接开 exec 通道。
     handles: Arc<Mutex<HashMap<SessionId, Arc<Handle<ClientHandler>>>>>,
+    /// 键盘交互认证的前端应答等待队列。
+    auth_prompts: AuthPrompts,
+    /// 每个会话的输出编码，用于把前端 UTF-8 输入转成目标字符集。
+    encodings: Arc<Mutex<HashMap<SessionId, &'static encoding_rs::Encoding>>>,
 }
 
 impl SshManager {
@@ -41,6 +46,7 @@ impl SshManager {
         &self,
         profile: Profile,
         vault: Arc<Vault>,
+        known_hosts: Arc<KnownHosts>,
         on_event: TauriChannel<TermEvent>,
     ) -> AppResult<SessionId> {
         let session_id = SessionId::new();
@@ -51,16 +57,36 @@ impl SshManager {
             state: SessionState::Authenticating,
         });
 
-        let connected = connect_profile(&profile, &vault).await?;
+        let prefs = profile.ssh_prefs();
+        let encoding = resolve_encoding(prefs.encoding.as_deref());
+        let auth_ui = AuthUi {
+            prompts: &self.auth_prompts,
+            on_event: &on_event,
+        };
+        let connected = connect_profile(&profile, &vault, known_hosts, Some(auth_ui)).await?;
         let mut channel = connected
             .handle
             .channel_open_session()
             .await
             .map_err(|e| AppError::new("ssh.channel_failed", e.to_string()))?;
+        let term = prefs
+            .terminal_type
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("xterm-256color");
         channel
-            .request_pty(true, "xterm-256color", 120, 32, 0, 0, &[])
+            .request_pty(true, term, 120, 32, 0, 0, &[])
             .await
             .map_err(|e| AppError::new("ssh.pty_failed", e.to_string()))?;
+        for item in &prefs.env {
+            let key = item.key.trim();
+            if key.is_empty() {
+                continue;
+            }
+            // 部分服务端会拒绝 SetEnv，失败不阻断登录。
+            let _ = channel.set_env(true, key, item.value.as_str()).await;
+        }
         channel
             .request_shell(true)
             .await
@@ -72,6 +98,7 @@ impl SshManager {
             .lock()
             .await
             .insert(session_id, connected.handle.clone());
+        self.encodings.lock().await.insert(session_id, encoding);
 
         let _ = on_event.send(TermEvent::State {
             state: SessionState::Ready,
@@ -80,12 +107,41 @@ impl SshManager {
             title: profile.name.clone(),
         });
 
+        let startup = startup_script(&prefs);
+        let keepalive = keepalive_command(&prefs);
         let manager = self.clone();
         tokio::spawn(async move {
-            run_session(manager, session_id, Some(connected), channel, rx, on_event).await;
+            run_session(
+                manager,
+                session_id,
+                Some(connected),
+                channel,
+                rx,
+                on_event,
+                encoding,
+                startup,
+                keepalive,
+            )
+            .await;
         });
 
         Ok(session_id)
+    }
+
+    /// 把前端提交的键盘交互认证应答交回等待中的连接流程。
+    pub async fn respond_auth(
+        &self,
+        prompt_id: uuid::Uuid,
+        responses: Option<Vec<String>>,
+    ) -> AppResult<()> {
+        if self.auth_prompts.respond(prompt_id, responses).await {
+            Ok(())
+        } else {
+            Err(AppError::new(
+                "auth.prompt_expired",
+                "认证提示已失效或已超时，请重新连接",
+            ))
+        }
     }
 
     /// 在当前 SSH 会话上开一个新通道执行命令，并作为独立终端会话返回。
@@ -122,7 +178,18 @@ impl SshManager {
 
         let manager = self.clone();
         tokio::spawn(async move {
-            run_session(manager, exec_id, None, channel, rx, on_event).await;
+            run_session(
+                manager,
+                exec_id,
+                None,
+                channel,
+                rx,
+                on_event,
+                encoding_rs::UTF_8,
+                None,
+                None,
+            )
+            .await;
         });
 
         Ok(exec_id)
@@ -175,10 +242,7 @@ impl SshManager {
             .map_err(|_| AppError::new("ssh.exec_timeout", "远端命令执行超时"))
     }
 
-    pub(crate) async fn handle(
-        &self,
-        session: SessionId,
-    ) -> AppResult<Arc<Handle<ClientHandler>>> {
+    pub(crate) async fn handle(&self, session: SessionId) -> AppResult<Arc<Handle<ClientHandler>>> {
         self.handles
             .lock()
             .await
@@ -188,9 +252,17 @@ impl SshManager {
     }
 
     pub async fn write(&self, session: SessionId, bytes: Vec<u8>) -> AppResult<()> {
+        let encoding = self
+            .encodings
+            .lock()
+            .await
+            .get(&session)
+            .copied()
+            .unwrap_or(encoding_rs::UTF_8);
+        let payload = encode_input(&bytes, encoding);
         let sender = self.sender(session).await?;
         sender
-            .send(TermInput::Data(bytes))
+            .send(TermInput::Data(payload))
             .await
             .map_err(|_| AppError::new("session.closed", "会话已关闭"))
     }
@@ -228,8 +300,11 @@ async fn run_session(
     mut channel: Channel<Msg>,
     mut rx: mpsc::Receiver<TermInput>,
     on_event: TauriChannel<TermEvent>,
+    encoding: &'static encoding_rs::Encoding,
+    startup: Option<String>,
+    keepalive: Option<(String, Duration)>,
 ) {
-    let mut decoder = Utf8Decoder::default();
+    let mut decoder = EncodingDecoder::new(encoding);
     let mut buffer = String::new();
     let mut seq = 0u64;
     let mut exit_code: Option<i32> = None;
@@ -237,6 +312,22 @@ async fn run_session(
 
     let mut ticker = interval(Duration::from_millis(16));
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+    if let Some(script) = startup {
+        if channel.data(script.as_bytes()).await.is_err() {
+            reason = "发送初始化命令失败".to_string();
+        }
+    }
+
+    let mut keepalive_ticker = keepalive.as_ref().map(|(_, period)| {
+        let mut ticker = interval(*period);
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        ticker
+    });
+    if let Some(ticker) = keepalive_ticker.as_mut() {
+        // interval 的第一次 tick 会立即完成，先消费掉。
+        ticker.tick().await;
+    }
 
     loop {
         tokio::select! {
@@ -279,12 +370,25 @@ async fn run_session(
                     None => break,
                 }
             }
+            _ = async {
+                match keepalive_ticker.as_mut() {
+                    Some(ticker) => { ticker.tick().await; }
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                if let Some((command, _)) = keepalive.as_ref() {
+                    let _ = channel.data(format!("{command}\r").as_bytes()).await;
+                }
+            }
             _ = ticker.tick() => {
                 flush(&mut buffer, &mut seq, &on_event);
             }
         }
     }
 
+    if let Some(text) = decoder.finish() {
+        buffer.push_str(&text);
+    }
     flush(&mut buffer, &mut seq, &on_event);
     let _ = channel.eof().await;
     // 只有独立打开的会话才断开连接；复用父连接的 exec 会话不能断开整条 SSH。
@@ -296,6 +400,7 @@ async fn run_session(
         manager.handles.lock().await.remove(&session_id);
     }
     manager.sessions.lock().await.remove(&session_id);
+    manager.encodings.lock().await.remove(&session_id);
     let _ = on_event.send(TermEvent::Exit {
         code: exit_code,
         reason: Some(reason),
@@ -311,6 +416,107 @@ fn flush(buffer: &mut String, seq: &mut u64, on_event: &TauriChannel<TermEvent>)
         seq: *seq,
         text: std::mem::take(buffer),
     });
+}
+
+fn resolve_encoding(label: Option<&str>) -> &'static encoding_rs::Encoding {
+    label
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| encoding_rs::Encoding::for_label(value.as_bytes()))
+        .unwrap_or(encoding_rs::UTF_8)
+}
+
+/// 前端 xterm 始终发送 UTF-8，按会话编码转换成目标字符集后再写入 SSH。
+fn encode_input(bytes: &[u8], encoding: &'static encoding_rs::Encoding) -> Vec<u8> {
+    if std::ptr::eq(encoding, encoding_rs::UTF_8) {
+        return bytes.to_vec();
+    }
+    let text = String::from_utf8_lossy(bytes);
+    let (encoded, _, _) = encoding.encode(&text);
+    encoded.into_owned()
+}
+
+fn startup_script(prefs: &SshPrefs) -> Option<String> {
+    let mut lines = Vec::new();
+    if let Some(path) = prefs
+        .default_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        lines.push(format!("cd {}", shell_quote(path)));
+    }
+    if let Some(command) = prefs
+        .init_command
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        lines.push(command.to_string());
+    }
+    if lines.is_empty() {
+        None
+    } else {
+        Some(format!("{}\r", lines.join("\r")))
+    }
+}
+
+fn keepalive_command(prefs: &SshPrefs) -> Option<(String, Duration)> {
+    prefs
+        .keepalive_command
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|command| {
+            (
+                command.to_string(),
+                Duration::from_millis(prefs.keepalive_command_ms.max(1000)),
+            )
+        })
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// 按会话编码增量解码远端输出。
+struct EncodingDecoder {
+    decoder: encoding_rs::Decoder,
+}
+
+impl EncodingDecoder {
+    fn new(encoding: &'static encoding_rs::Encoding) -> Self {
+        Self {
+            decoder: encoding.new_decoder_without_bom_handling(),
+        }
+    }
+
+    fn push(&mut self, chunk: &[u8]) -> Option<String> {
+        let mut out = String::new();
+        let mut src = chunk;
+        while !src.is_empty() {
+            let (_, read, _) = self.decoder.decode_to_string(src, &mut out, false);
+            if read == 0 {
+                break;
+            }
+            src = &src[read..];
+        }
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
+    }
+
+    fn finish(&mut self) -> Option<String> {
+        let mut out = String::new();
+        let _ = self.decoder.decode_to_string(&[], &mut out, true);
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
+    }
 }
 
 /// 增量 UTF-8 解码：避免多字节字符被 SSH / 串口分片切断时出现乱码。

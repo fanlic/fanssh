@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
-import { errorText, profileUpsert, serialListPorts, vaultPut } from "../api";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+import {
+  errorText,
+  profileUpsert,
+  readTextFile,
+  serialListPorts,
+  vaultPut,
+} from "../api";
 import type {
   AuthRef,
   Profile,
@@ -10,25 +17,44 @@ import type {
   SerialParity,
   SerialPortInfo,
   SerialPrefs,
+  SshPrefs,
+  TelnetPrefs,
+  TunnelKind,
+  TunnelPrefs,
+  TunnelRoute,
+  VncPrefs,
 } from "../types";
-import { Icon } from "./Icon";
+import { Icon, type IconName } from "./Icon";
+import { useAppStore } from "../store";
 
 interface Props {
   open: boolean;
   initial: Profile | null;
   /** 当前构建平台（windows / linux / macos），用于隐藏或提示平台不支持的能力。 */
   platform: string;
+  /** 新建时默认选中的协议，跟随顶部协议 tab。 */
+  defaultProtocol?: Protocol;
   onClose: () => void;
   onSaved: (profile: Profile) => void;
   onError: (message: string) => void;
 }
 
-type AuthMode = "password" | "key" | "none";
+type AuthMode = "password" | "key" | "keyboard_interactive" | "none";
+
+interface JumpForm {
+  host: string;
+  port: string;
+  user: string;
+  authMode: AuthMode;
+  password: string;
+  keyText: string;
+}
 
 interface FormState {
   name: string;
   group: string;
   tags: string;
+  remark: string;
   protocol: Protocol;
   host: string;
   port: string;
@@ -37,15 +63,13 @@ interface FormState {
   password: string;
   keyText: string;
   passphrase: string;
-  useJump: boolean;
-  jumpHost: string;
-  jumpPort: string;
-  jumpUser: string;
-  jumpAuthMode: AuthMode;
-  jumpPassword: string;
-  jumpKeyText: string;
+  jumps: JumpForm[];
+  ssh: SshPrefs;
   rdp: RdpPrefs;
   serial: SerialPrefs;
+  telnet: TelnetPrefs;
+  vnc: VncPrefs;
+  tunnel: TunnelPrefs;
 }
 
 /** 串口参数预设：只回填波特率/数据位/停止位/校验/流控，不覆盖端口。 */
@@ -102,10 +126,53 @@ const DEFAULT_SERIAL: SerialPrefs = {
   newline: "raw",
 };
 
+const DEFAULT_SSH: SshPrefs = {
+  timeout_ms: 20000,
+  keepalive_ms: 5000,
+  encoding: "utf-8",
+  terminal_type: "",
+  proxy: "",
+  proxy_disabled: false,
+  init_command: "",
+  default_path: "",
+  keepalive_command: "",
+  keepalive_command_ms: 60000,
+  env: [],
+  monitor_disabled: false,
+  disable_pwd_jump: false,
+  x11: false,
+  x11_cookie: "",
+  host_key_algorithms: "",
+  ciphers: "",
+  kex_algorithms: "",
+};
+
+const DEFAULT_TUNNEL: TunnelPrefs = {
+  server_id: null,
+  auto_reconnect: true,
+  routes: [],
+};
+
+const DEFAULT_TELNET: TelnetPrefs = {
+  enable_mapping: false,
+  mapping_preset: "standard",
+};
+
+const DEFAULT_VNC: VncPrefs = {
+  auth_method: "vnc",
+  read_only: false,
+  shared: true,
+  scale_viewport: true,
+  crop_viewport: false,
+  quality: 6,
+  compression: 2,
+};
+
 const EMPTY: FormState = {
   name: "",
   group: "",
   tags: "",
+  remark: "",
   protocol: "ssh",
   host: "",
   port: "22",
@@ -114,13 +181,8 @@ const EMPTY: FormState = {
   password: "",
   keyText: "",
   passphrase: "",
-  useJump: false,
-  jumpHost: "",
-  jumpPort: "22",
-  jumpUser: "",
-  jumpAuthMode: "password",
-  jumpPassword: "",
-  jumpKeyText: "",
+  jumps: [],
+  ssh: { ...DEFAULT_SSH },
   rdp: {
     fullscreen: true,
     width: 1920,
@@ -133,19 +195,80 @@ const EMPTY: FormState = {
     domain: "",
   },
   serial: { ...DEFAULT_SERIAL },
+  telnet: { ...DEFAULT_TELNET },
+  vnc: { ...DEFAULT_VNC },
+  tunnel: { ...DEFAULT_TUNNEL, routes: [] },
 };
 
-function toForm(profile: Profile | null): FormState {
-  if (!profile) return { ...EMPTY, rdp: { ...EMPTY.rdp }, serial: { ...DEFAULT_SERIAL } };
-  const jump = profile.jump[0];
+function normalizeSshPrefs(prefs: SshPrefs): SshPrefs {
+  const text = (value?: string | null) => {
+    const trimmed = (value ?? "").trim();
+    return trimmed ? trimmed : null;
+  };
+  return {
+    ...prefs,
+    timeout_ms: Math.max(1000, Number(prefs.timeout_ms) || 20000),
+    keepalive_ms: Math.max(0, Number(prefs.keepalive_ms) || 0),
+    keepalive_command_ms: Math.max(1000, Number(prefs.keepalive_command_ms) || 60000),
+    encoding: text(prefs.encoding) ?? "utf-8",
+    terminal_type: text(prefs.terminal_type),
+    proxy: text(prefs.proxy),
+    init_command: text(prefs.init_command),
+    default_path: text(prefs.default_path),
+    keepalive_command: text(prefs.keepalive_command),
+    x11_cookie: text(prefs.x11_cookie),
+    host_key_algorithms: text(prefs.host_key_algorithms),
+    ciphers: text(prefs.ciphers),
+    kex_algorithms: text(prefs.kex_algorithms),
+    env: prefs.env
+      .map((item) => ({ key: item.key.trim(), value: item.value }))
+      .filter((item) => item.key),
+  };
+}
+
+function toForm(profile: Profile | null, defaultProtocol: Protocol = "ssh"): FormState {
+  if (!profile) {
+    return {
+      ...EMPTY,
+      protocol: defaultProtocol,
+      rdp: { ...EMPTY.rdp },
+      serial: { ...DEFAULT_SERIAL },
+      telnet: { ...DEFAULT_TELNET },
+      vnc: { ...DEFAULT_VNC },
+      tunnel: { ...DEFAULT_TUNNEL, routes: [] },
+    };
+  }
   const mode = (auth: AuthRef | undefined): AuthMode =>
-    auth?.kind === "password" ? "password" : auth?.kind === "key" ? "key" : "none";
+    auth?.kind === "password"
+      ? "password"
+      : auth?.kind === "key"
+        ? "key"
+        : auth?.kind === "keyboard_interactive"
+          ? "keyboard_interactive"
+          : "none";
+  const jump = profile.jump.map((hop) => ({
+    host: hop.target.host,
+    port: String(hop.target.port),
+    user: hop.target.user,
+    authMode: mode(hop.auth),
+    password: "",
+    keyText: "",
+  }));
   const serial = { ...DEFAULT_SERIAL, ...(profile.options.serial ?? {}) };
   if (!serial.port && profile.protocol === "serial") serial.port = profile.target.host;
+  const tunnel: TunnelPrefs = {
+    ...DEFAULT_TUNNEL,
+    ...(profile.options.tunnel ?? {}),
+    routes: (profile.options.tunnel?.routes ?? []).map((route) => ({
+      ...route,
+      local_host: route.local_host || "127.0.0.1",
+    })),
+  };
   return {
     name: profile.name,
     group: profile.group ?? "",
     tags: profile.tags.join(", "),
+    remark: profile.remark ?? "",
     protocol: profile.protocol,
     host: profile.target.host,
     port: String(profile.target.port),
@@ -154,16 +277,38 @@ function toForm(profile: Profile | null): FormState {
     password: "",
     keyText: "",
     passphrase: "",
-    useJump: Boolean(jump),
-    jumpHost: jump?.target.host ?? "",
-    jumpPort: String(jump?.target.port ?? 22),
-    jumpUser: jump?.target.user ?? "",
-    jumpAuthMode: mode(jump?.auth),
-    jumpPassword: "",
-    jumpKeyText: "",
+    jumps: jump,
+    ssh: { ...DEFAULT_SSH, ...(profile.options.ssh ?? {}) },
     rdp: { ...EMPTY.rdp, ...(profile.options.rdp ?? {}) },
     serial,
+    telnet: { ...DEFAULT_TELNET, ...(profile.options.telnet ?? {}) },
+    vnc: { ...DEFAULT_VNC, ...(profile.options.vnc ?? {}) },
+    tunnel,
   };
+}
+
+/** 不同转发类型下字段的实际含义不同，标签随之切换。 */
+function routeLabels(kind: TunnelKind): { listen: string; target: string; hint: string } {
+  switch (kind) {
+    case "remote":
+      return {
+        listen: "服务器监听地址",
+        target: "本机目标地址",
+        hint: "远程转发：服务器监听该端口，收到的连接通过 SSH 回连本机目标。",
+      };
+    case "dynamic":
+      return {
+        listen: "本机监听地址（SOCKS5）",
+        target: "",
+        hint: "动态代理：本机提供 SOCKS5 服务，目标地址由客户端在连接时指定。",
+      };
+    default:
+      return {
+        listen: "本机监听地址",
+        target: "远端目标地址",
+        hint: "本地转发：从本机访问远端。示例：本机 127.0.0.1:3000 -> server:80。",
+      };
+  }
 }
 
 function existingPasswordSecret(profile: Profile | null): string | null {
@@ -177,19 +322,8 @@ function existingKeySecrets(profile: Profile | null): { key: string | null; pass
   return { key: null, pass: null };
 }
 
-function existingJumpPassword(profile: Profile | null): string | null {
-  const auth = profile?.jump[0]?.auth;
-  return auth?.kind === "password" ? auth.secret : null;
-}
-
-function existingJumpKey(profile: Profile | null): { key: string | null; pass: string | null } {
-  const auth = profile?.jump[0]?.auth;
-  if (auth?.kind === "key") return { key: auth.key, pass: auth.passphrase ?? null };
-  return { key: null, pass: null };
-}
-
 /**
- * RDP 密码是可选的：留空不写凭据，启动 mstsc 后由系统弹窗输入。
+ * RDP 密码是可选的：留空不写凭据，连接时由前端一次性弹窗输入（支持空密码）。
  * 填了则只写进 vault，profile 里只保留 secret id。
  */
 async function buildRdpAuth(
@@ -205,16 +339,28 @@ async function buildRdpAuth(
   return initial?.auth.kind === "password" ? initial.auth : { kind: "none" };
 }
 
-export function SessionDialog({ open, initial, platform, onClose, onSaved, onError }: Props) {
-  const [form, setForm] = useState<FormState>(() => toForm(initial));
+export function SessionDialog({
+  open,
+  initial,
+  platform,
+  defaultProtocol,
+  onClose,
+  onSaved,
+  onError,
+}: Props) {
+  const [form, setForm] = useState<FormState>(() => toForm(initial, defaultProtocol));
   const [saving, setSaving] = useState(false);
   const [ports, setPorts] = useState<SerialPortInfo[]>([]);
   const [portsLoading, setPortsLoading] = useState(false);
   const [portsError, setPortsError] = useState<string | null>(null);
+  const [navId, setNavId] = useState("sec-basic");
+  const profiles = useAppStore((state) => state.profiles);
+  const sshServers = profiles.filter((profile) => profile.protocol === "ssh");
 
   useEffect(() => {
-    if (open) setForm(toForm(initial));
-  }, [open, initial]);
+    if (open) setForm(toForm(initial, defaultProtocol));
+    if (open) setNavId("sec-basic");
+  }, [open, initial, defaultProtocol]);
 
   const refreshPorts = async () => {
     setPortsLoading(true);
@@ -243,6 +389,82 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
   const updateSerial = (patch: Partial<SerialPrefs>) =>
     setForm((prev) => ({ ...prev, serial: { ...prev.serial, ...patch } }));
 
+  const updateSsh = (patch: Partial<SshPrefs>) =>
+    setForm((prev) => ({ ...prev, ssh: { ...prev.ssh, ...patch } }));
+
+  const updateTunnel = (patch: Partial<TunnelPrefs>) =>
+    setForm((prev) => ({ ...prev, tunnel: { ...prev.tunnel, ...patch } }));
+
+  const updateRoute = (index: number, patch: Partial<TunnelRoute>) =>
+    setForm((prev) => ({
+      ...prev,
+      tunnel: {
+        ...prev.tunnel,
+        routes: prev.tunnel.routes.map((route, i) =>
+          i === index ? { ...route, ...patch } : route,
+        ),
+      },
+    }));
+
+  const addRoute = (preset: Partial<TunnelRoute> = {}) =>
+    setForm((prev) => ({
+      ...prev,
+      tunnel: {
+        ...prev.tunnel,
+        routes: [
+          ...prev.tunnel.routes,
+          {
+            id: crypto.randomUUID(),
+            kind: "local",
+            local_host: "127.0.0.1",
+            local_port: 8080,
+            remote_host: "127.0.0.1",
+            remote_port: 80,
+            ...preset,
+          },
+        ],
+      },
+    }));
+
+  const removeRoute = (index: number) =>
+    setForm((prev) => ({
+      ...prev,
+      tunnel: {
+        ...prev.tunnel,
+        routes: prev.tunnel.routes.filter((_, i) => i !== index),
+      },
+    }));
+
+  const updateJump = (index: number, patch: Partial<JumpForm>) =>
+    setForm((prev) => ({
+      ...prev,
+      jumps: prev.jumps.map((hop, i) => (i === index ? { ...hop, ...patch } : hop)),
+    }));
+
+  const addJump = () =>
+    setForm((prev) => ({
+      ...prev,
+      jumps: [
+        ...prev.jumps,
+        { host: "", port: "22", user: "", authMode: "password", password: "", keyText: "" },
+      ],
+    }));
+
+  const removeJump = (index: number) =>
+    setForm((prev) => ({ ...prev, jumps: prev.jumps.filter((_, i) => i !== index) }));
+
+  const loadKeyFile = async (index: number | null) => {
+    try {
+      const selected = await openFileDialog({ multiple: false, directory: false });
+      if (!selected || Array.isArray(selected)) return;
+      const text = await readTextFile(selected);
+      if (index == null) update("keyText", text);
+      else updateJump(index, { keyText: text });
+    } catch (error) {
+      onError(errorText(error));
+    }
+  };
+
   const applyPreset = (id: string) => {
     const preset = SERIAL_PRESETS.find((item) => item.id === id);
     if (!preset) return; // 自定义：保留当前值
@@ -258,6 +480,7 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
     label: string,
   ): Promise<AuthRef> => {
     if (mode === "none") return { kind: "none" };
+    if (mode === "keyboard_interactive") return { kind: "keyboard_interactive" };
     if (mode === "password") {
       if (password.trim()) {
         const id = await vaultPut(
@@ -295,7 +518,130 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
         .filter(Boolean);
 
       let profile: Profile;
-      if (form.protocol === "serial") {
+      if (form.protocol === "tunnel") {
+        const server = sshServers.find((item) => item.id === form.tunnel.server_id);
+        if (!server) throw new Error("请选择隧道使用的 SSH 服务器");
+        if (form.tunnel.routes.length === 0) throw new Error("请至少添加一条转发路由");
+        const routes: TunnelRoute[] = form.tunnel.routes.map((route, index) => {
+          const localPort = Number(route.local_port);
+          if (!Number.isInteger(localPort) || localPort <= 0 || localPort > 65535) {
+            throw new Error(`第 ${index + 1} 条路由的监听端口不合法`);
+          }
+          if (route.kind === "dynamic") {
+            return {
+              id: route.id,
+              kind: route.kind,
+              local_host: route.local_host.trim() || "127.0.0.1",
+              local_port: localPort,
+              remote_host: "",
+              remote_port: 0,
+            };
+          }
+          const remotePort = Number(route.remote_port);
+          if (!route.remote_host.trim()) {
+            throw new Error(`第 ${index + 1} 条路由的目标地址不能为空`);
+          }
+          if (!Number.isInteger(remotePort) || remotePort <= 0 || remotePort > 65535) {
+            throw new Error(`第 ${index + 1} 条路由的目标端口不合法`);
+          }
+          return {
+            id: route.id,
+            kind: route.kind,
+            local_host: route.local_host.trim() || "127.0.0.1",
+            local_port: localPort,
+            remote_host: route.remote_host.trim(),
+            remote_port: remotePort,
+          };
+        });
+        profile = {
+          id: initial?.id ?? crypto.randomUUID(),
+          name: form.name.trim(),
+          group: form.group.trim() || null,
+          protocol: "tunnel",
+          // target 跟随服务器，便于侧栏显示与搜索；实际连接只使用 server_id。
+          target: { ...server.target },
+          auth: { kind: "none" },
+          jump: [],
+          tags,
+          options: {
+            tunnel: {
+              server_id: server.id,
+              auto_reconnect: form.tunnel.auto_reconnect,
+              routes,
+            },
+          },
+        };
+      } else if (form.protocol === "telnet") {
+        if (!form.host.trim()) throw new Error("请填写 Telnet 地址");
+        const port = Number(form.port);
+        if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error("端口不合法");
+        let auth: AuthRef = { kind: "none" };
+        if (form.password.trim()) {
+          const existing = initial?.auth.kind === "password" ? initial.auth.secret : null;
+          const id = await vaultPut(
+            existing,
+            "password",
+            `${form.name.trim()} Telnet 密码`,
+            form.password,
+          );
+          auth = { kind: "password", secret: id };
+        } else if (initial?.auth.kind === "password") {
+          auth = initial.auth;
+        }
+        profile = {
+          id: initial?.id ?? crypto.randomUUID(),
+          name: form.name.trim(),
+          group: form.group.trim() || null,
+          remark: form.remark.trim() || null,
+          protocol: "telnet",
+          target: {
+            host: form.host.trim(),
+            port,
+            user: form.user.trim(),
+          },
+          auth,
+          jump: [],
+          tags,
+          options: { telnet: { ...form.telnet } },
+        };
+      } else if (form.protocol === "vnc") {
+        if (!form.host.trim()) throw new Error("请填写 VNC 地址");
+        const port = Number(form.port);
+        if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error("端口不合法");
+        let auth: AuthRef = { kind: "none" };
+        if (form.vnc.auth_method === "vnc") {
+          const existing = initial?.auth.kind === "password" ? initial.auth.secret : null;
+          if (form.password.trim()) {
+            const id = await vaultPut(
+              existing,
+              "password",
+              `${form.name.trim()} VNC 密码`,
+              form.password,
+            );
+            auth = { kind: "password", secret: id };
+          } else if (existing) {
+            auth = { kind: "password", secret: existing };
+          } else {
+            throw new Error("VNC 密码认证需要填写密码");
+          }
+        }
+        profile = {
+          id: initial?.id ?? crypto.randomUUID(),
+          name: form.name.trim(),
+          group: form.group.trim() || null,
+          remark: form.remark.trim() || null,
+          protocol: "vnc",
+          target: {
+            host: form.host.trim(),
+            port,
+            user: "",
+          },
+          auth,
+          jump: [],
+          tags,
+          options: { vnc: { ...form.vnc } },
+        };
+      } else if (form.protocol === "serial") {
         // 串口配置与凭据无关，不触碰 vault。
         const serial: SerialPrefs = {
           ...form.serial,
@@ -336,29 +682,32 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
               );
 
         const jump = [];
-        if (form.useJump && form.protocol === "ssh") {
-          if (!form.jumpHost.trim() || !form.jumpUser.trim()) {
-            throw new Error("跳板机的主机和用户名不能为空");
+        if (form.protocol === "ssh") {
+          for (const [index, hop] of form.jumps.entries()) {
+            if (!hop.host.trim() || !hop.user.trim()) {
+              throw new Error(`第 ${index + 1} 层跳板机的主机和用户名不能为空`);
+            }
+            const hopPort = Number(hop.port) || 22;
+            const hopAuth = await buildAuth(
+              hop.authMode,
+              hop.password,
+              hop.keyText,
+              "",
+              initial?.jump[index]?.auth,
+              `${form.name.trim()} 跳板机 ${index + 1}`,
+            );
+            jump.push({
+              target: { host: hop.host.trim(), port: hopPort, user: hop.user.trim() },
+              auth: hopAuth,
+            });
           }
-          const jumpPort = Number(form.jumpPort) || 22;
-          const jumpAuth = await buildAuth(
-            form.jumpAuthMode,
-            form.jumpPassword,
-            form.jumpKeyText,
-            "",
-            initial?.jump[0]?.auth,
-            `${form.name.trim()} 跳板机`,
-          );
-          jump.push({
-            target: { host: form.jumpHost.trim(), port: jumpPort, user: form.jumpUser.trim() },
-            auth: jumpAuth,
-          });
         }
 
         profile = {
           id: initial?.id ?? crypto.randomUUID(),
           name: form.name.trim(),
           group: form.group.trim() || null,
+          remark: form.remark.trim() || null,
           protocol: form.protocol,
           target: {
             host: form.host.trim(),
@@ -371,7 +720,9 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
           options:
             form.protocol === "rdp"
               ? { rdp: { ...form.rdp, domain: (form.rdp.domain ?? "").trim() || null } }
-              : {},
+              : form.protocol === "ssh"
+                ? { ssh: normalizeSshPrefs(form.ssh) }
+                : {},
         };
       }
       const saved = await profileUpsert(profile);
@@ -385,9 +736,6 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
   };
 
   const presetId = matchSerialPreset(form.serial);
-  // RDP 依赖 Windows 的 mstsc.exe：非 Windows 不提供新建入口，编辑已有 RDP 配置时保留入口并提示。
-  const isWindows = platform === "windows";
-  const showRdpTab = isWindows || form.protocol === "rdp" || initial?.protocol === "rdp";
   const knownPort = ports.some((port) => port.port_name === form.serial.port);
   const portHint = portsLoading
     ? "正在枚举系统串口…"
@@ -400,6 +748,46 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
     platform === "linux"
       ? "Linux 下普通用户默认无权打开串口设备，需要先执行 sudo usermod -aG dialout $USER 并重新登录。"
       : null;
+  const navItems: Array<{ id: string; label: string; icon: IconName }> =
+    form.protocol === "tunnel"
+      ? [
+          { id: "sec-basic", label: "基本信息", icon: "info" },
+          { id: "sec-tunnel", label: "路由", icon: "transfer" },
+        ]
+      : form.protocol === "serial"
+      ? [
+          { id: "sec-basic", label: "基本信息", icon: "info" },
+          { id: "sec-serial", label: "串口参数", icon: "plug" },
+        ]
+      : form.protocol === "telnet"
+        ? [
+            { id: "sec-basic", label: "基本信息", icon: "info" },
+            { id: "sec-telnet-mapping", label: "按键映射", icon: "term" },
+          ]
+        : form.protocol === "vnc"
+        ? [
+            { id: "sec-basic", label: "基础", icon: "info" },
+            { id: "sec-vnc-display", label: "显示", icon: "link" },
+            { id: "sec-vnc-advanced", label: "高级", icon: "gear" },
+          ]
+        : form.protocol === "rdp"
+        ? [
+            { id: "sec-basic", label: "基本信息", icon: "info" },
+            { id: "sec-rdp-auth", label: "登录凭据", icon: "lock" },
+            { id: "sec-rdp", label: "RDP 参数", icon: "link" },
+          ]
+        : [
+            { id: "sec-basic", label: "基本信息", icon: "info" },
+            { id: "sec-conn", label: "连接设置", icon: "term" },
+            { id: "sec-jump", label: "跳板机", icon: "link" },
+            { id: "sec-proxy", label: "代理设置", icon: "lock" },
+            { id: "sec-other", label: "其他设置", icon: "gear" },
+            { id: "sec-init", label: "初始化", icon: "clock" },
+          ];
+  const jumpTo = (id: string) => {
+    setNavId(id);
+    document.getElementById(id)?.scrollIntoView({ block: "nearest" });
+  };
 
   return (
     <div className="dlg-mask" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
@@ -412,7 +800,21 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
           </button>
         </div>
 
-        <div className="dlg-body">
+        <div className="dlg-body dlg-split">
+          <nav className="dlg-nav">
+            {navItems.map((item) => (
+              <button
+                key={item.id}
+                className={`dlg-nav-item${navId === item.id ? " is-active" : ""}`}
+                onClick={() => jumpTo(item.id)}
+              >
+                <Icon name={item.icon} size={14} />
+                {item.label}
+              </button>
+            ))}
+          </nav>
+          <div className="dlg-form">
+            <div id="sec-basic">
           <div className="dlg-seg" role="tablist">
             <button
               role="tab"
@@ -433,27 +835,51 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
             >
               串口
             </button>
-            {showRdpTab && (
-              <button
-                role="tab"
-                aria-selected={form.protocol === "rdp"}
-                className={form.protocol === "rdp" ? "is-active" : ""}
-                onClick={() => {
-                  update("protocol", "rdp");
-                  if (form.port === "22") update("port", "3389");
-                }}
-              >
-                RDP 远程桌面
-              </button>
-            )}
+            <button
+              role="tab"
+              aria-selected={form.protocol === "rdp"}
+              className={form.protocol === "rdp" ? "is-active" : ""}
+              onClick={() => {
+                update("protocol", "rdp");
+                if (form.port === "22") update("port", "3389");
+              }}
+            >
+              RDP 远程桌面
+            </button>
+            <button
+              role="tab"
+              aria-selected={form.protocol === "telnet"}
+              className={form.protocol === "telnet" ? "is-active" : ""}
+              onClick={() => {
+                update("protocol", "telnet");
+                if (form.port === "22" || form.port === "3389") update("port", "23");
+              }}
+            >
+              Telnet
+            </button>
+            <button
+              role="tab"
+              aria-selected={form.protocol === "tunnel"}
+              className={form.protocol === "tunnel" ? "is-active" : ""}
+              onClick={() => update("protocol", "tunnel")}
+            >
+              隧道
+            </button>
+            <button
+              role="tab"
+              aria-selected={form.protocol === "vnc"}
+              className={form.protocol === "vnc" ? "is-active" : ""}
+              onClick={() => {
+                update("protocol", "vnc");
+                if (form.port === "22" || form.port === "3389" || form.port === "23") {
+                  update("port", "5900");
+                }
+              }}
+            >
+              VNC
+            </button>
           </div>
 
-          {!isWindows && form.protocol === "rdp" && (
-            <p className="update-hint">
-              当前平台（{platform}）不支持 RDP 远程桌面：RDP 依赖 Windows 的 mstsc.exe。该配置可以保留，
-              在 Linux 上打开时会提示平台不支持，请到 Windows 客户端使用。
-            </p>
-          )}
           <div className="form-grid">
             <label>
               名称 *
@@ -469,7 +895,7 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
             </label>
           </div>
 
-          {form.protocol !== "serial" && (
+          {form.protocol !== "serial" && form.protocol !== "tunnel" && (
             <div className="form-grid">
               <label className="span-2">
                 主机 *
@@ -479,19 +905,339 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
                 端口 *
                 <input value={form.port} onChange={(e) => update("port", e.target.value)} />
               </label>
-              <label>
-                用户名
+              {form.protocol !== "vnc" && (
+                <label>
+                  用户名
+                  <input
+                    value={form.user}
+                    onChange={(e) => update("user", e.target.value)}
+                    placeholder={form.protocol === "rdp" ? "Administrator" : "root"}
+                  />
+                </label>
+              )}
+            </div>
+          )}
+
+          {form.protocol === "telnet" && (
+            <div className="form-grid">
+              <label className="span-2">
+                密码
                 <input
-                  value={form.user}
-                  onChange={(e) => update("user", e.target.value)}
-                  placeholder={form.protocol === "rdp" ? "Administrator" : "root"}
+                  type="password"
+                  value={form.password}
+                  onChange={(e) => update("password", e.target.value)}
+                  placeholder={
+                    initial?.auth.kind === "password" ? "留空沿用已保存的密码" : "可选，连接后自动填写"
+                  }
+                />
+              </label>
+              <p className="update-hint span-2">
+                Telnet 是明文协议：用户名、密码和全部会话数据都会以明文在网络上传输，仅在可信网络中使用。
+                凭据仍保存在本地加密凭据库中。
+              </p>
+              <label className="span-2">
+                备注
+                <textarea
+                  rows={2}
+                  value={form.remark}
+                  onChange={(e) => update("remark", e.target.value)}
+                  placeholder="用途、负责人等"
                 />
               </label>
             </div>
           )}
 
-          {form.protocol === "serial" && (
+          {form.protocol === "vnc" && (
+            <div className="form-grid">
+              <label>
+                认证方式
+                <select
+                  value={form.vnc.auth_method}
+                  onChange={(e) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      vnc: { ...prev.vnc, auth_method: e.target.value as VncPrefs["auth_method"] },
+                    }))
+                  }
+                >
+                  <option value="vnc">VNC 密码</option>
+                  <option value="none">无认证</option>
+                </select>
+                <span className="muted">使用 VNC 密码完成认证。</span>
+              </label>
+              {form.vnc.auth_method === "vnc" && (
+                <label>
+                  密码
+                  <input
+                    type="password"
+                    value={form.password}
+                    onChange={(e) => update("password", e.target.value)}
+                    placeholder={
+                      initial?.auth.kind === "password" ? "留空沿用已保存的密码" : "VNC 登录密码"
+                    }
+                  />
+                </label>
+              )}
+              <label className="span-2">
+                备注
+                <textarea
+                  rows={2}
+                  value={form.remark}
+                  onChange={(e) => update("remark", e.target.value)}
+                  placeholder="用途、负责人等"
+                />
+              </label>
+              <label className="inline span-2">
+                <input
+                  type="checkbox"
+                  checked={form.vnc.read_only}
+                  onChange={(e) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      vnc: { ...prev.vnc, read_only: e.target.checked },
+                    }))
+                  }
+                />
+                只读
+                <span className="muted">（只看画面，不发送键盘和鼠标）</span>
+              </label>
+              <label className="inline span-2">
+                <input
+                  type="checkbox"
+                  checked={form.vnc.shared}
+                  onChange={(e) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      vnc: { ...prev.vnc, shared: e.target.checked },
+                    }))
+                  }
+                />
+                共享连接
+                <span className="muted">（允许其他客户端同时接入）</span>
+              </label>
+            </div>
+          )}
+
+          {form.protocol === "vnc" && (
+            <div id="sec-vnc-display">
+              <div className="section-title">显示</div>
+              <div className="form-grid">
+                <label className="inline span-2">
+                  <input
+                    type="checkbox"
+                    checked={form.vnc.scale_viewport}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        vnc: { ...prev.vnc, scale_viewport: e.target.checked },
+                      }))
+                    }
+                  />
+                  缩放视口
+                  <span className="muted">（关掉后按原始像素显示，可滚动查看）</span>
+                </label>
+                <label className="inline span-2">
+                  <input
+                    type="checkbox"
+                    checked={form.vnc.crop_viewport}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        vnc: { ...prev.vnc, crop_viewport: e.target.checked },
+                      }))
+                    }
+                  />
+                  裁剪视口
+                  <span className="muted">（超出面板的部分裁剪而不是滚动）</span>
+                </label>
+                <label>
+                  画面清晰度（{form.vnc.quality}）
+                  <input
+                    type="range"
+                    min={1}
+                    max={9}
+                    value={form.vnc.quality}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        vnc: { ...prev.vnc, quality: Number(e.target.value) },
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  压缩强度（{form.vnc.compression}）
+                  <input
+                    type="range"
+                    min={1}
+                    max={9}
+                    value={form.vnc.compression}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        vnc: { ...prev.vnc, compression: Number(e.target.value) },
+                      }))
+                    }
+                  />
+                </label>
+              </div>
+            </div>
+          )}
+
+          {form.protocol === "vnc" && (
+            <div id="sec-vnc-advanced">
+              <div className="section-title">高级</div>
+              <p className="muted">
+                当前使用兼容性优先的 Raw / CopyRect 编码，清晰度与压缩强度会随配置保存，
+                供后续启用 Tight 编码时使用。
+              </p>
+            </div>
+          )}
+
+          {form.protocol === "tunnel" && (
             <>
+              <div className="form-grid">
+                <label className="span-2">
+                  服务器 *
+                  <select
+                    value={form.tunnel.server_id ?? ""}
+                    onChange={(e) =>
+                      updateTunnel({ server_id: e.target.value || null })
+                    }
+                  >
+                    <option value="">请选择 SSH 服务器</option>
+                    {sshServers.map((server) => (
+                      <option key={server.id} value={server.id}>
+                        {server.name}（{server.target.user}@{server.target.host}:{server.target.port}）
+                      </option>
+                    ))}
+                  </select>
+                  <span className="muted">
+                    隧道复用该 SSH 配置的连接与凭据；服务器需允许 TCP 转发。
+                  </span>
+                </label>
+                {sshServers.length === 0 && (
+                  <p className="update-hint span-2">
+                    还没有 SSH 服务器配置，请先新建一个 SSH 连接再创建隧道。
+                  </p>
+                )}
+                <label className="inline span-2">
+                  <input
+                    type="checkbox"
+                    checked={form.tunnel.auto_reconnect}
+                    onChange={(e) => updateTunnel({ auto_reconnect: e.target.checked })}
+                  />
+                  自动重连
+                  <span className="muted">（隧道意外断开后自动恢复）</span>
+                </label>
+              </div>
+            </>
+          )}
+
+          {form.protocol === "ssh" && (
+            <>
+              <div className="form-grid">
+                <label className="span-2">
+                  主机备注
+                  <textarea
+                    rows={3}
+                    value={form.remark}
+                    onChange={(e) => update("remark", e.target.value)}
+                    placeholder="用途、负责人、机房位置等"
+                  />
+                </label>
+                <label>
+                  超时时间（毫秒）
+                  <input
+                    value={form.ssh.timeout_ms}
+                    onChange={(e) => updateSsh({ timeout_ms: Number(e.target.value) || 0 })}
+                    placeholder="20000"
+                  />
+                </label>
+                <label>
+                  心跳时间（毫秒）
+                  <input
+                    value={form.ssh.keepalive_ms}
+                    onChange={(e) => updateSsh({ keepalive_ms: Number(e.target.value) || 0 })}
+                    placeholder="5000，0 表示关闭"
+                  />
+                </label>
+              </div>
+
+              <div className="section-title">认证</div>
+              <div className="form-grid">
+                <label>
+                  验证方式
+                  <select
+                    value={form.authMode}
+                    onChange={(e) => update("authMode", e.target.value as AuthMode)}
+                  >
+                    <option value="password">密码</option>
+                    <option value="key">秘钥</option>
+                    <option value="keyboard_interactive">交互认证（OTP / 安全问题）</option>
+                  </select>
+                </label>
+                {form.authMode === "password" && (
+                  <label>
+                    密码 {existingPasswordSecret(initial) && <span className="muted">（留空沿用已保存密码）</span>}
+                    <input
+                      type="password"
+                      value={form.password}
+                      onChange={(e) => update("password", e.target.value)}
+                      placeholder={existingPasswordSecret(initial) ? "••••••••" : ""}
+                    />
+                  </label>
+                )}
+                {form.authMode === "key" && (
+                  <>
+                    <label className="span-2">
+                      登录秘钥
+                      <textarea
+                        rows={5}
+                        value={form.keyText}
+                        onChange={(e) => update("keyText", e.target.value)}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          const file = e.dataTransfer.files[0];
+                          if (file) void file.text().then((text) => update("keyText", text));
+                        }}
+                        placeholder={
+                          existingKeySecrets(initial).key
+                            ? "已保存私钥，留空则不修改"
+                            : "-----BEGIN OPENSSH PRIVATE KEY-----（也可拖拽文件到此处）"
+                        }
+                      />
+                    </label>
+                    <div className="span-2 key-actions">
+                      <button type="button" className="btn-ghost sm" onClick={() => void loadKeyFile(null)}>
+                        加载本地秘钥
+                      </button>
+                      <span className="muted">或把私钥文件拖拽到上方输入框</span>
+                    </div>
+                    <label>
+                      私钥口令（可选）
+                      <input
+                        type="password"
+                        value={form.passphrase}
+                        onChange={(e) => update("passphrase", e.target.value)}
+                        placeholder={existingKeySecrets(initial).pass ? "已保存口令" : ""}
+                      />
+                    </label>
+                  </>
+                )}
+                {form.authMode === "keyboard_interactive" && (
+                  <p className="update-hint span-2">
+                    连接时服务端会逐轮返回提示，弹窗输入 OTP / 安全问题等内容；输入不会保存到本地。
+                  </p>
+                )}
+              </div>
+            </>
+          )}
+            </div>
+
+          {form.protocol === "serial" && (
+            <div id="sec-serial">
               <div className="section-title">串口参数</div>
               <div className="form-grid">
                 <label className="span-2">
@@ -655,12 +1401,12 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
                   <p className="serial-hint span-2">{serialGroupHint}</p>
                 )}
               </div>
-            </>
+            </div>
           )}
 
           {form.protocol === "rdp" && (
-            <>
-              <div className="section-title">登录凭据（写入 Windows 凭据管理器，不落配置文件）</div>
+            <div id="sec-rdp-auth">
+              <div className="section-title">登录凭据（加密保存在本地凭据库，不落配置文件）</div>
               <div className="form-grid">
                 <label>
                   域 / 工作组（可选）
@@ -672,7 +1418,7 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
                 </label>
                 <label>
                   密码
-                  <span className="muted">（留空则启动后由 mstsc 弹窗输入）</span>
+                  <span className="muted">（留空则连接时一次性输入，支持空密码）</span>
                   <input
                     type="password"
                     value={form.password}
@@ -681,120 +1427,526 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
                   />
                 </label>
               </div>
-            </>
+            </div>
           )}
 
           {form.protocol === "ssh" && (
-            <>
-              <div className="section-title">认证</div>
+            <div id="sec-conn">
+              <div className="section-title">连接设置</div>
               <div className="form-grid">
                 <label>
-                  方式
-                  <select value={form.authMode} onChange={(e) => update("authMode", e.target.value as AuthMode)}>
-                    <option value="password">密码</option>
-                    <option value="key">私钥</option>
-                    <option value="none">无（仅跳板机可能用到）</option>
+                  编码
+                  <select
+                    value={form.ssh.encoding ?? "utf-8"}
+                    onChange={(e) => updateSsh({ encoding: e.target.value })}
+                  >
+                    <option value="utf-8">UTF-8</option>
+                    <option value="gbk">GBK</option>
+                    <option value="gb18030">GB18030</option>
+                    <option value="big5">BIG5</option>
                   </select>
+                  <span className="muted">远端输出按该编码解码，本地输入按该编码回写。</span>
                 </label>
-                {form.authMode === "password" && (
-                  <label>
-                    密码 {existingPasswordSecret(initial) && <span className="muted">（留空则沿用已保存密码）</span>}
-                    <input
-                      type="password"
-                      value={form.password}
-                      onChange={(e) => update("password", e.target.value)}
-                      placeholder={existingPasswordSecret(initial) ? "••••••••" : ""}
-                    />
-                  </label>
-                )}
-                {form.authMode === "key" && (
-                  <>
-                    <label className="span-2">
-                      私钥内容（OpenSSH / PEM）
-                      <textarea
-                        rows={5}
-                        value={form.keyText}
-                        onChange={(e) => update("keyText", e.target.value)}
-                        placeholder={existingKeySecrets(initial).key ? "已保存私钥，留空则不修改" : "-----BEGIN OPENSSH PRIVATE KEY-----"}
-                      />
-                    </label>
-                    <label>
-                      私钥口令（可选）
-                      <input
-                        type="password"
-                        value={form.passphrase}
-                        onChange={(e) => update("passphrase", e.target.value)}
-                        placeholder={existingKeySecrets(initial).pass ? "已保存口令" : ""}
-                      />
-                    </label>
-                  </>
-                )}
+                <label>
+                  终端类型
+                  <input
+                    value={form.ssh.terminal_type ?? ""}
+                    onChange={(e) => updateSsh({ terminal_type: e.target.value })}
+                    placeholder="xterm-256color"
+                  />
+                  <span className="muted">留空使用 xterm-256color。</span>
+                </label>
               </div>
+            </div>
+          )}
 
-              <div className="section-title">
-                <label className="inline">
+          {form.protocol === "ssh" && (
+            <div id="sec-jump">
+              <div className="section-title">跳板机链路（按顺序连接，第一项最先连接）</div>
+              <div className="jump-list">
+                {form.jumps.map((hop, index) => (
+                  <div className="jump-card" key={index}>
+                    <div className="jump-head">
+                      <span>第 {index + 1} 层</span>
+                      <button type="button" className="btn-ghost sm" onClick={() => removeJump(index)}>
+                        移除
+                      </button>
+                    </div>
+                    <div className="form-grid">
+                      <label className="span-2">
+                        主机 *
+                        <input
+                          value={hop.host}
+                          onChange={(e) => updateJump(index, { host: e.target.value })}
+                          placeholder="跳板机地址"
+                        />
+                      </label>
+                      <label>
+                        端口
+                        <input
+                          value={hop.port}
+                          onChange={(e) => updateJump(index, { port: e.target.value })}
+                        />
+                      </label>
+                      <label>
+                        用户名 *
+                        <input
+                          value={hop.user}
+                          onChange={(e) => updateJump(index, { user: e.target.value })}
+                        />
+                      </label>
+                      <label>
+                        认证
+                        <select
+                          value={hop.authMode}
+                          onChange={(e) =>
+                            updateJump(index, { authMode: e.target.value as AuthMode })
+                          }
+                        >
+                          <option value="password">密码</option>
+                          <option value="key">秘钥</option>
+                          <option value="keyboard_interactive">交互认证</option>
+                          <option value="none">无</option>
+                        </select>
+                      </label>
+                      {hop.authMode === "password" && (
+                        <label>
+                          密码
+                          <input
+                            type="password"
+                            value={hop.password}
+                            onChange={(e) => updateJump(index, { password: e.target.value })}
+                            placeholder={
+                              initial?.jump[index]?.auth.kind === "password" ? "留空沿用" : ""
+                            }
+                          />
+                        </label>
+                      )}
+                      {hop.authMode === "key" && (
+                        <label className="span-2">
+                          私钥
+                          <textarea
+                            rows={4}
+                            value={hop.keyText}
+                            onChange={(e) => updateJump(index, { keyText: e.target.value })}
+                            onDragOver={(e) => e.preventDefault()}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              const file = e.dataTransfer.files[0];
+                              if (file) void file.text().then((text) => updateJump(index, { keyText: text }));
+                            }}
+                            placeholder={
+                              initial?.jump[index]?.auth.kind === "key"
+                                ? "已保存私钥，留空不修改"
+                                : "粘贴私钥，或拖拽文件到此处"
+                            }
+                          />
+                          <button
+                            type="button"
+                            className="btn-ghost sm key-load"
+                            onClick={() => void loadKeyFile(index)}
+                          >
+                            加载本地秘钥
+                          </button>
+                        </label>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <button type="button" className="btn-ghost sm" onClick={addJump}>
+                + 添加跳板机
+              </button>
+            </div>
+          )}
+
+          {form.protocol === "ssh" && (
+            <div id="sec-proxy">
+              <div className="section-title">代理设置</div>
+              <div className="form-grid">
+                <label className="inline span-2">
                   <input
                     type="checkbox"
-                    checked={form.useJump}
-                    onChange={(e) => update("useJump", e.target.checked)}
+                    checked={form.ssh.proxy_disabled}
+                    onChange={(e) => updateSsh({ proxy_disabled: e.target.checked })}
                   />
-                  通过跳板机（ProxyJump，当前版本支持一层）
+                  禁用代理
+                </label>
+                <label className="span-2">
+                  代理地址
+                  <input
+                    value={form.ssh.proxy ?? ""}
+                    onChange={(e) => updateSsh({ proxy: e.target.value })}
+                    placeholder="socks5://127.0.0.1:1080 或 http://user:pass@127.0.0.1:8080"
+                    disabled={form.ssh.proxy_disabled}
+                  />
+                  <span className="muted">
+                    支持 socks5://、socks5h://、http://；用户名密码可直接写在地址中。
+                  </span>
+                </label>
+                <p className="update-hint span-2">
+                  代理在建立 SSH 连接前完成握手；仅代理首层连接，跳板机之间的通道仍走 SSH。
+                </p>
+              </div>
+            </div>
+          )}
+
+          {form.protocol === "ssh" && (
+            <div id="sec-other">
+              <div className="section-title">其他设置</div>
+              <div className="form-grid">
+                <label className="inline span-2">
+                  <input
+                    type="checkbox"
+                    checked={form.ssh.monitor_disabled}
+                    onChange={(e) => updateSsh({ monitor_disabled: e.target.checked })}
+                  />
+                  禁止列表监控
+                  <span className="pending-tag">暂未生效</span>
+                </label>
+                <label className="inline span-2">
+                  <input
+                    type="checkbox"
+                    checked={form.ssh.disable_pwd_jump}
+                    onChange={(e) => updateSsh({ disable_pwd_jump: e.target.checked })}
+                  />
+                  禁用 pwd 自动跳转
+                  <span className="pending-tag">暂未生效</span>
+                </label>
+                <label className="inline span-2">
+                  <input
+                    type="checkbox"
+                    checked={form.ssh.x11}
+                    onChange={(e) => updateSsh({ x11: e.target.checked })}
+                  />
+                  启用 X11 转发
+                  <span className="pending-tag">暂未生效</span>
+                </label>
+                <label className="span-2">
+                  X11 Cookie
+                  <input
+                    value={form.ssh.x11_cookie ?? ""}
+                    onChange={(e) => updateSsh({ x11_cookie: e.target.value })}
+                    disabled={!form.ssh.x11}
+                    placeholder="MIT-MAGIC-COOKIE-1"
+                  />
+                </label>
+                <label>
+                  主机密钥算法
+                  <input
+                    value={form.ssh.host_key_algorithms ?? ""}
+                    onChange={(e) => updateSsh({ host_key_algorithms: e.target.value })}
+                    placeholder="ssh-ed25519,rsa-sha2-512"
+                  />
+                  <span className="pending-tag">暂未生效</span>
+                </label>
+                <label>
+                  Cipher 算法
+                  <input
+                    value={form.ssh.ciphers ?? ""}
+                    onChange={(e) => updateSsh({ ciphers: e.target.value })}
+                    placeholder="aes256-gcm@openssh.com"
+                  />
+                  <span className="pending-tag">暂未生效</span>
+                </label>
+                <label className="span-2">
+                  密钥交换算法
+                  <input
+                    value={form.ssh.kex_algorithms ?? ""}
+                    onChange={(e) => updateSsh({ kex_algorithms: e.target.value })}
+                    placeholder="curve25519-sha256"
+                  />
+                  <span className="pending-tag">暂未生效</span>
                 </label>
               </div>
-              {form.useJump && (
-                <div className="form-grid">
-                  <label className="span-2">
-                    跳板机主机 *
-                    <input value={form.jumpHost} onChange={(e) => update("jumpHost", e.target.value)} />
-                  </label>
-                  <label>
-                    端口
-                    <input value={form.jumpPort} onChange={(e) => update("jumpPort", e.target.value)} />
-                  </label>
-                  <label>
-                    用户名 *
-                    <input value={form.jumpUser} onChange={(e) => update("jumpUser", e.target.value)} />
-                  </label>
-                  <label>
-                    认证
-                    <select
-                      value={form.jumpAuthMode}
-                      onChange={(e) => update("jumpAuthMode", e.target.value as AuthMode)}
+            </div>
+          )}
+
+          {form.protocol === "ssh" && (
+            <div id="sec-init">
+              <div className="section-title">初始化</div>
+              <div className="form-grid">
+                <label className="span-2">
+                  默认路径
+                  <input
+                    value={form.ssh.default_path ?? ""}
+                    onChange={(e) => updateSsh({ default_path: e.target.value })}
+                    placeholder="/var/www"
+                  />
+                  <span className="muted">登录后自动执行 cd（路径会做 shell 转义）。</span>
+                </label>
+                <label className="span-2">
+                  初始执行命令
+                  <textarea
+                    rows={3}
+                    value={form.ssh.init_command ?? ""}
+                    onChange={(e) => updateSsh({ init_command: e.target.value })}
+                    placeholder="例如：export LANG=en_US.UTF-8"
+                  />
+                </label>
+                <label className="span-2">
+                  保活命令
+                  <input
+                    value={form.ssh.keepalive_command ?? ""}
+                    onChange={(e) => updateSsh({ keepalive_command: e.target.value })}
+                    placeholder="例如：echo keepalive"
+                  />
+                </label>
+                <label>
+                  保活周期（毫秒）
+                  <input
+                    value={form.ssh.keepalive_command_ms}
+                    onChange={(e) =>
+                      updateSsh({ keepalive_command_ms: Number(e.target.value) || 0 })
+                    }
+                    placeholder="60000"
+                  />
+                </label>
+                <div className="span-2">
+                  <div className="section-subtitle">
+                    环境变量
+                    <button
+                      type="button"
+                      className="btn-ghost sm"
+                      onClick={() =>
+                        updateSsh({ env: [...form.ssh.env, { key: "", value: "" }] })
+                      }
                     >
-                      <option value="password">密码</option>
-                      <option value="key">私钥</option>
-                      <option value="none">无</option>
-                    </select>
-                  </label>
-                  {form.jumpAuthMode === "password" && (
-                    <label>
-                      密码 {existingJumpPassword(initial) && <span className="muted">（留空沿用）</span>}
+                      + 添加
+                    </button>
+                  </div>
+                  {form.ssh.env.map((item, index) => (
+                    <div className="env-row" key={index}>
                       <input
-                        type="password"
-                        value={form.jumpPassword}
-                        onChange={(e) => update("jumpPassword", e.target.value)}
+                        value={item.key}
+                        onChange={(e) =>
+                          updateSsh({
+                            env: form.ssh.env.map((entry, i) =>
+                              i === index ? { ...entry, key: e.target.value } : entry,
+                            ),
+                          })
+                        }
+                        placeholder="变量名"
                       />
-                    </label>
-                  )}
-                  {form.jumpAuthMode === "key" && (
-                    <label className="span-2">
-                      跳板机私钥
-                      <textarea
-                        rows={4}
-                        value={form.jumpKeyText}
-                        onChange={(e) => update("jumpKeyText", e.target.value)}
-                        placeholder={existingJumpKey(initial).key ? "已保存，留空不修改" : ""}
+                      <input
+                        value={item.value}
+                        onChange={(e) =>
+                          updateSsh({
+                            env: form.ssh.env.map((entry, i) =>
+                              i === index ? { ...entry, value: e.target.value } : entry,
+                            ),
+                          })
+                        }
+                        placeholder="变量值"
                       />
-                    </label>
+                      <button
+                        type="button"
+                        className="btn-ghost sm"
+                        onClick={() =>
+                          updateSsh({ env: form.ssh.env.filter((_, i) => i !== index) })
+                        }
+                      >
+                        删除
+                      </button>
+                    </div>
+                  ))}
+                  {form.ssh.env.length === 0 && (
+                    <p className="muted">登录后通过 SSH SetEnv 下发；服务端拒绝时不阻断登录。</p>
                   )}
                 </div>
+              </div>
+            </div>
+          )}
+
+          {form.protocol === "tunnel" && (
+            <div id="sec-tunnel">
+              <div className="section-title">转发路由（可添加多条，连接后分别启停）</div>
+              <div className="jump-list">
+                {form.tunnel.routes.map((route, index) => {
+                  const labels = routeLabels(route.kind);
+                  return (
+                    <div className="jump-card" key={route.id}>
+                      <div className="jump-head">
+                        <span>路由 {index + 1}</span>
+                        <button
+                          type="button"
+                          className="btn-ghost sm"
+                          onClick={() => removeRoute(index)}
+                        >
+                          移除
+                        </button>
+                      </div>
+                      <div className="form-grid">
+                        <label>
+                          类型
+                          <select
+                            value={route.kind}
+                            onChange={(e) =>
+                              updateRoute(index, { kind: e.target.value as TunnelKind })
+                            }
+                          >
+                            <option value="local">本地转发</option>
+                            <option value="remote">远程转发</option>
+                            <option value="dynamic">动态代理（SOCKS5）</option>
+                          </select>
+                        </label>
+                        <label>
+                          {labels.listen}
+                          <div className="field-row">
+                            <input
+                              value={route.local_host}
+                              onChange={(e) =>
+                                updateRoute(index, { local_host: e.target.value })
+                              }
+                              placeholder="127.0.0.1"
+                            />
+                            <input
+                              value={route.local_port}
+                              onChange={(e) =>
+                                updateRoute(index, {
+                                  local_port: Number(e.target.value) || 0,
+                                })
+                              }
+                              placeholder="8080"
+                            />
+                          </div>
+                        </label>
+                        {route.kind !== "dynamic" && (
+                          <label className="span-2">
+                            {labels.target}
+                            <div className="field-row">
+                              <input
+                                value={route.remote_host}
+                                onChange={(e) =>
+                                  updateRoute(index, { remote_host: e.target.value })
+                                }
+                                placeholder="127.0.0.1"
+                              />
+                              <input
+                                value={route.remote_port}
+                                onChange={(e) =>
+                                  updateRoute(index, {
+                                    remote_port: Number(e.target.value) || 0,
+                                  })
+                                }
+                                placeholder="3306"
+                              />
+                            </div>
+                          </label>
+                        )}
+                        <p className="muted span-2">{labels.hint}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="key-actions">
+                <button type="button" className="btn-ghost sm" onClick={() => addRoute()}>
+                  + 添加路由
+                </button>
+                <span className="muted">快速填充</span>
+                <button
+                  type="button"
+                  className="btn-ghost sm"
+                  onClick={() =>
+                    addRoute({
+                      kind: "dynamic",
+                      local_port: 1080,
+                      remote_host: "",
+                      remote_port: 0,
+                    })
+                  }
+                >
+                  动态代理：SOCKS5 1080
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost sm"
+                  onClick={() =>
+                    addRoute({
+                      kind: "local",
+                      local_port: 3307,
+                      remote_host: "127.0.0.1",
+                      remote_port: 3306,
+                    })
+                  }
+                >
+                  本地转发：MySQL 本机 3307 → 远端 3306
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost sm"
+                  onClick={() =>
+                    addRoute({
+                      kind: "local",
+                      local_port: 8080,
+                      remote_host: "127.0.0.1",
+                      remote_port: 80,
+                    })
+                  }
+                >
+                  本地转发：Web 本机 8080 → 远端 80
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost sm"
+                  onClick={() =>
+                    addRoute({
+                      kind: "remote",
+                      local_port: 9000,
+                      remote_host: "127.0.0.1",
+                      remote_port: 3000,
+                    })
+                  }
+                >
+                  远程转发：服务器 9000 → 本机 3000
+                </button>
+              </div>
+              {form.tunnel.routes.length === 0 && (
+                <p className="muted">至少添加一条路由并保存后，才能在隧道面板中启动。</p>
               )}
-            </>
+            </div>
+          )}
+
+          {form.protocol === "telnet" && (
+            <div id="sec-telnet-mapping">
+              <div className="section-title">按键映射</div>
+              <div className="form-grid">
+                <label className="inline span-2">
+                  <input
+                    type="checkbox"
+                    checked={form.telnet.enable_mapping}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        telnet: { ...prev.telnet, enable_mapping: e.target.checked },
+                      }))
+                    }
+                  />
+                  启用映射
+                </label>
+                <label className="span-2">
+                  预设模板
+                  <select
+                    value={form.telnet.mapping_preset}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        telnet: { ...prev.telnet, mapping_preset: e.target.value },
+                      }))
+                    }
+                  >
+                    <option value="standard">标准模式 - 默认按键映射，不进行任何转换</option>
+                  </select>
+                  <span className="muted">标准模式按键原样发送；启用映射不会改变当前行为。</span>
+                </label>
+              </div>
+            </div>
           )}
 
           {form.protocol === "rdp" && (
-            <>
-              <div className="section-title">RDP 参数（写入 .rdp 后调用 mstsc.exe）</div>
+            <div id="sec-rdp">
+              <div className="section-title">RDP 参数（Windows / Linux 共用内嵌会话，不调用 mstsc）</div>
               <div className="form-grid">
                 <label className="inline">
                   <input
@@ -804,13 +1956,14 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
                   />
                   全屏
                 </label>
-                <label className="inline">
+                <label className="inline" title="剪贴板重定向为后续批次，当前版本不生效">
                   <input
                     type="checkbox"
+                    disabled
                     checked={form.rdp.clipboard}
                     onChange={(e) => update("rdp", { ...form.rdp, clipboard: e.target.checked })}
                   />
-                  剪贴板
+                  剪贴板（后续批次）
                 </label>
                 <label>
                   宽度
@@ -826,21 +1979,23 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
                     onChange={(e) => update("rdp", { ...form.rdp, height: Number(e.target.value) || 0 })}
                   />
                 </label>
-                <label className="inline">
+                <label className="inline" title="多显示器为后续批次，当前版本不生效">
                   <input
                     type="checkbox"
+                    disabled
                     checked={form.rdp.multimon}
                     onChange={(e) => update("rdp", { ...form.rdp, multimon: e.target.checked })}
                   />
-                  多显示器
+                  多显示器（后续批次）
                 </label>
-                <label className="inline">
+                <label className="inline" title="磁盘映射为后续批次，当前版本不生效">
                   <input
                     type="checkbox"
+                    disabled
                     checked={form.rdp.drive_redirect}
                     onChange={(e) => update("rdp", { ...form.rdp, drive_redirect: e.target.checked })}
                   />
-                  映射本地磁盘
+                  映射本地磁盘（后续批次）
                 </label>
                 <label className="inline">
                   <input
@@ -850,16 +2005,23 @@ export function SessionDialog({ open, initial, platform, onClose, onSaved, onErr
                   />
                   管理员会话
                 </label>
-                <label>
-                  RD 网关（可选）
+                <label title="RD 网关暂不支持（mstsc 支持，内嵌会话为后续批次）">
+                  RD 网关（暂不支持）
                   <input
                     value={form.rdp.gateway ?? ""}
+                    disabled
                     onChange={(e) => update("rdp", { ...form.rdp, gateway: e.target.value })}
                   />
                 </label>
               </div>
-            </>
+              <p className="serial-hint">
+                内嵌会话首批支持分辨率、域、NLA/CredSSP 登录与键鼠输入；空密码可手动输入。
+                剪贴板、多显示器、磁盘映射、音频、EGFX/H.264 为后续批次。
+                智能卡登录与 RD 网关在 mstsc 中可用，但内嵌会话暂不支持，请勿依赖这些配置连接。
+              </p>
+            </div>
           )}
+          </div>
         </div>
 
         <div className="dlg-foot">

@@ -21,6 +21,8 @@ export interface TabState {
   panes: PaneState[];
   activePane: number;
   direction: "row" | "column";
+  /** 第一个面板占可拖动区域的比例，0.15 ~ 0.85。 */
+  splitRatio: number;
 }
 
 export interface TabStatePatch {
@@ -30,6 +32,32 @@ export interface TabStatePatch {
 let paneSeq = 0;
 
 const AI_OPEN_KEY = "fanssh.ai-panel-open";
+const RECENT_KEY = "fanssh.recent-connections";
+
+/** 最近连接的 profile id，供标签栏下拉菜单使用。 */
+function readRecent(): string[] {
+  try {
+    const raw = window.localStorage.getItem(RECENT_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeRecent(ids: string[]): void {
+  try {
+    window.localStorage.setItem(RECENT_KEY, JSON.stringify(ids.slice(0, 12)));
+  } catch {
+    // 隐私模式下写入失败不影响本次会话
+  }
+}
+
+function pushRecent(ids: string[], id: string): string[] {
+  const next = [id, ...ids.filter((item) => item !== id)].slice(0, 12);
+  writeRecent(next);
+  return next;
+}
 
 /** AI 面板折叠状态在刷新后保持；没有记录时默认折叠。 */
 function readAiOpen(): boolean {
@@ -68,12 +96,16 @@ interface AppStore {
   activeTabId: string | null;
   sftpProfileId: string | null;
   aiOpen: boolean;
+  recentProfileIds: string[];
 
   loadProfiles: () => Promise<void>;
   openProfileTab: (profile: Profile, initialInput?: string) => void;
   openProfileInSplit: (tabId: string, profile: Profile, direction?: "row" | "column") => void;
   closeTab: (tabId: string) => void;
   closePane: (tabId: string, paneKey: string) => void;
+  moveTab: (fromId: string, toId: string) => void;
+  setTabSplitRatio: (tabId: string, ratio: number) => void;
+  removeRecent: (profileId: string) => void;
   setActiveTab: (tabId: string) => void;
   setActivePane: (tabId: string, index: number) => void;
   setPaneTitle: (tabId: string, paneKey: string, title: string) => void;
@@ -96,6 +128,7 @@ export const useAppStore = create<AppStore>()((set, get) => ({
   activeTabId: null,
   sftpProfileId: null,
   aiOpen: readAiOpen(),
+  recentProfileIds: readRecent(),
 
   loadProfiles: async () => {
     set({ profilesLoading: true, profilesError: null });
@@ -116,8 +149,13 @@ export const useAppStore = create<AppStore>()((set, get) => ({
       panes: [pane],
       activePane: 0,
       direction: "row",
+      splitRatio: 0.5,
     };
-    set((state) => ({ tabs: [...state.tabs, tab], activeTabId: tab.id }));
+    set((state) => ({
+      tabs: [...state.tabs, tab],
+      activeTabId: tab.id,
+      recentProfileIds: pushRecent(state.recentProfileIds, profile.id),
+    }));
   },
 
   openProfileInSplit: (tabId, profile, direction = "row") => {
@@ -133,8 +171,38 @@ export const useAppStore = create<AppStore>()((set, get) => ({
             }
           : tab,
       ),
+      recentProfileIds: pushRecent(state.recentProfileIds, profile.id),
     }));
   },
+
+  moveTab: (fromId, toId) => {
+    if (fromId === toId) return;
+    set((state) => {
+      const from = state.tabs.findIndex((tab) => tab.id === fromId);
+      const to = state.tabs.findIndex((tab) => tab.id === toId);
+      if (from < 0 || to < 0) return {};
+      const tabs = [...state.tabs];
+      const [moved] = tabs.splice(from, 1);
+      tabs.splice(to, 0, moved);
+      return { tabs };
+    });
+  },
+
+  setTabSplitRatio: (tabId, ratio) =>
+    set((state) => ({
+      tabs: state.tabs.map((tab) =>
+        tab.id === tabId
+          ? { ...tab, splitRatio: Math.min(0.85, Math.max(0.15, ratio)) }
+          : tab,
+      ),
+    })),
+
+  removeRecent: (profileId) =>
+    set((state) => {
+      const next = state.recentProfileIds.filter((id) => id !== profileId);
+      writeRecent(next);
+      return { recentProfileIds: next };
+    }),
 
   closeTab: (tabId) => {
     set((state) => {

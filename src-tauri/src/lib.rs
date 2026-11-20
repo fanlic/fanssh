@@ -3,10 +3,13 @@ mod app;
 mod crypto;
 mod docker;
 mod ipc;
+mod known_hosts;
+mod monitor;
 mod profile;
 mod serial;
 mod session;
 mod transport;
+mod tunnel;
 mod util;
 mod vault;
 
@@ -32,13 +35,26 @@ pub fn run() {
             term_input,
             term_resize,
             term_close,
+            term_auth_respond,
+            read_text_file,
             docker_containers,
             docker_logs,
+            monitor_start,
+            monitor_stop,
             serial_list_ports,
             serial_open,
             serial_input,
             serial_set_lines,
             serial_close,
+            telnet_open,
+            telnet_input,
+            telnet_close,
+            vnc_open,
+            vnc_input,
+            vnc_close,
+            rdp_open,
+            rdp_input,
+            rdp_close,
             profile_list,
             profile_upsert,
             profile_delete,
@@ -47,21 +63,34 @@ pub fn run() {
             vault_put,
             vault_list,
             vault_delete,
+            known_hosts_list,
+            known_hosts_delete,
             sftp_open,
             sftp_list,
             sftp_chmod,
             sftp_upload,
             sftp_download,
+            sftp_rename,
+            sftp_mkdir,
+            sftp_remove,
+            sftp_read_text,
+            sftp_write_text,
+            sftp_local_exists,
             sftp_close,
             ai_settings_get,
             ai_settings_save,
+            ui_settings_get,
+            ui_settings_save,
             ai_chat,
             ai_nl2cmd,
-            rdp_launch,
+            tunnel_start,
+            tunnel_stop,
+            tunnel_active,
             updater_status,
             app_platform,
             updater_check,
             updater_install,
+            open_external,
         ])
         .run(tauri::generate_context!())
         .expect("FanSSH 启动失败");

@@ -465,6 +465,7 @@ fn remap_auth(auth: &mut AuthRef, map: &HashMap<Uuid, Uuid>, vault: &Vault) {
                 None => AuthRef::None,
             }
         }
+        AuthRef::KeyboardInteractive => AuthRef::KeyboardInteractive,
         AuthRef::None => AuthRef::None,
     };
     *auth = next;
@@ -476,7 +477,7 @@ fn validate(profile: &Profile) -> Result<()> {
     if profile.name.trim().is_empty() {
         bail!("名称不能为空");
     }
-    if profile.protocol != Protocol::Serial {
+    if !matches!(profile.protocol, Protocol::Serial | Protocol::Tunnel) {
         if profile.target.host.trim().is_empty() {
             bail!("主机地址不能为空");
         }
@@ -491,6 +492,36 @@ fn validate(profile: &Profile) -> Result<()> {
             }
         }
         Protocol::Rdp => {}
+        Protocol::Telnet => {}
+        Protocol::Vnc => {}
+        Protocol::Tunnel => {
+            let prefs = profile.tunnel_prefs();
+            if prefs.server_id.is_none() {
+                bail!("隧道需要选择一个 SSH 服务器");
+            }
+            if prefs.routes.is_empty() {
+                bail!("请至少添加一条转发路由");
+            }
+            if !profile.jump.is_empty() {
+                bail!("隧道配置不支持跳板机");
+            }
+            for (index, route) in prefs.routes.iter().enumerate() {
+                if route.local_port == 0 {
+                    bail!("第 {} 条路由的监听端口必须在 1-65535 之间", index + 1);
+                }
+                if route.local_host.trim().is_empty() {
+                    bail!("第 {} 条路由的监听地址不能为空", index + 1);
+                }
+                if route.kind != crate::session::model::TunnelKind::Dynamic {
+                    if route.remote_host.trim().is_empty() {
+                        bail!("第 {} 条路由的目标地址不能为空", index + 1);
+                    }
+                    if route.remote_port == 0 {
+                        bail!("第 {} 条路由的目标端口必须在 1-65535 之间", index + 1);
+                    }
+                }
+            }
+        }
         Protocol::Serial => {
             let prefs = profile.serial_prefs();
             if prefs.port.trim().is_empty() {
@@ -510,12 +541,31 @@ fn validate(profile: &Profile) -> Result<()> {
             }
         }
     }
-    if profile.jump.len() > 1 {
-        bail!("当前版本最多支持一层跳板机");
+    if profile.jump.len() > 8 {
+        bail!("跳板机链路最多 8 层");
     }
-    if let Some(hop) = profile.jump.first() {
+    for (index, hop) in profile.jump.iter().enumerate() {
         if hop.target.host.trim().is_empty() || hop.target.user.trim().is_empty() {
-            bail!("跳板机的主机和用户名不能为空");
+            bail!("第 {} 层跳板机的主机和用户名不能为空", index + 1);
+        }
+        if hop.target.port == 0 {
+            bail!("第 {} 层跳板机的端口不合法", index + 1);
+        }
+    }
+    if profile.protocol == Protocol::Ssh {
+        let prefs = profile.ssh_prefs();
+        if prefs.timeout_ms < 1000 {
+            bail!("超时时间不能小于 1000 毫秒");
+        }
+        if let Some(proxy) = prefs.proxy.as_deref() {
+            let proxy = proxy.trim();
+            if !proxy.is_empty()
+                && !proxy.starts_with("socks5://")
+                && !proxy.starts_with("socks5h://")
+                && !proxy.starts_with("http://")
+            {
+                bail!("代理地址只支持 socks5:// 或 http://");
+            }
         }
     }
     Ok(())

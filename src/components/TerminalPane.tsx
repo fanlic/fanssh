@@ -10,6 +10,10 @@ import {
   serialInput,
   serialOpen,
   serialSetLines,
+  telnetClose,
+  telnetInput,
+  telnetOpen,
+  termAuthRespond,
   termClose,
   termInput,
   termOpen,
@@ -24,31 +28,41 @@ import {
 } from "../lib/commandSuggest";
 import { terminalRegistry } from "../lib/terminalRegistry";
 import { useAppStore, type PaneState } from "../store";
+import { useUiSettingsStore } from "../uiSettings";
 import type { TermEvent } from "../types";
 import { Icon } from "./Icon";
 
-const THEME = {
-  background: "#0d1117",
-  foreground: "#e6edf3",
-  cursor: "#7ee787",
-  selectionBackground: "#264f78",
-  black: "#484f58",
-  red: "#ff7b72",
-  green: "#3fb950",
-  yellow: "#d29922",
-  blue: "#79c0ff",
-  magenta: "#bc8cff",
-  cyan: "#39c5cf",
-  white: "#b1bac4",
-  brightBlack: "#6e7681",
-  brightRed: "#ffa198",
-  brightGreen: "#56d364",
-  brightYellow: "#e3b341",
-  brightBlue: "#a5d6ff",
-  brightMagenta: "#d2a8ff",
-  brightCyan: "#56d4dd",
-  brightWhite: "#f0f6fc",
-};
+function buildTheme(accent: string) {
+  return {
+    background: "#0e1019",
+    foreground: "#ffffff",
+    cursor: accent,
+    selectionBackground: "rgba(61, 190, 113, 0.25)",
+    black: "#1a1a1a",
+    red: "#ff5c5c",
+    green: accent,
+    yellow: "#d7a54a",
+    blue: "#6a9fb5",
+    magenta: "#b3a4d8",
+    cyan: "#56d4dd",
+    white: "#d6d6d6",
+    brightBlack: "#6e6e6e",
+    brightRed: "#ff8a8a",
+    brightGreen: "#5fd88c",
+    brightYellow: "#e8c879",
+    brightBlue: "#8fbccf",
+    brightMagenta: "#cbbde8",
+    brightCyan: "#8fe3e8",
+    brightWhite: "#ffffff",
+  };
+}
+
+/** xterm 的字重只接受 normal/bold 或数字，设置里存的是字符串。 */
+function fontWeight(value: string): "normal" | "bold" | number {
+  const num = Number(value);
+  if (value.trim() !== "" && Number.isFinite(num)) return num;
+  return value === "bold" ? "bold" : "normal";
+}
 
 interface Props {
   tabId: string;
@@ -85,14 +99,24 @@ export function TerminalPane({ tabId, pane, active }: Props) {
     hasSelection: boolean;
     selection: string;
   } | null>(null);
+  const [authPrompt, setAuthPrompt] = useState<{
+    promptId: string;
+    name: string;
+    instructions: string;
+    prompts: Array<{ prompt: string; echo: boolean }>;
+    values: string[];
+  } | null>(null);
 
   const setPaneStatus = useAppStore((s) => s.setPaneStatus);
   const setPaneSession = useAppStore((s) => s.setPaneSession);
   const setPaneTitle = useAppStore((s) => s.setPaneTitle);
   const setActivePane = useAppStore((s) => s.setActivePane);
   const closePane = useAppStore((s) => s.closePane);
+  const liveTerminal = useUiSettingsStore((s) => s.settings.terminal);
+  const liveThemeColor = useUiSettingsStore((s) => s.settings.appearance.theme_color);
   const profile = useAppStore((s) => s.profiles.find((item) => item.id === pane.profileId));
   const isSerial = profile?.protocol === "serial";
+  const isTelnet = profile?.protocol === "telnet";
   const isSsh = profile?.protocol === "ssh";
   const serialPrefs = profile?.options.serial ?? null;
   // 串口控制线状态；连接后可在面板顶部实时切换。
@@ -107,14 +131,24 @@ export function TerminalPane({ tabId, pane, active }: Props) {
     if (!host) return;
     disposedRef.current = false;
 
+    const ui = useUiSettingsStore.getState().settings;
     const term = new Terminal({
-      fontFamily:
-        '"Cascadia Mono", "JetBrains Mono", Consolas, "Noto Sans Mono CJK SC", monospace',
-      fontSize: 13,
-      lineHeight: 1.4,
-      cursorBlink: true,
-      scrollback: 8000,
-      theme: THEME,
+      fontFamily: ui.terminal.font_family,
+      fontWeight: fontWeight(ui.terminal.normal_weight),
+      fontWeightBold: fontWeight(ui.terminal.bold_weight),
+      fontSize: ui.terminal.font_size,
+      lineHeight: ui.terminal.line_height,
+      letterSpacing: ui.terminal.letter_spacing,
+      cursorBlink: ui.terminal.cursor_blink,
+      cursorStyle: ui.terminal.cursor_style as "bar" | "block" | "underline",
+      cursorInactiveStyle: ui.terminal.inactive_cursor_style as
+        | "none"
+        | "outline"
+        | "block"
+        | "bar"
+        | "underline",
+      scrollback: ui.terminal.scrollback,
+      theme: buildTheme(ui.appearance.theme_color),
       allowTransparency: false,
     });
     const fit = new FitAddon();
@@ -130,14 +164,36 @@ export function TerminalPane({ tabId, pane, active }: Props) {
     fitRef.current = fit;
     terminalRegistry.register(pane.key, term);
 
+    // 按住 Ctrl 滚动滚轮缩放当前面板字号（可在设置里关闭）。
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey) return;
+      if (!useUiSettingsStore.getState().settings.terminal.wheel_zoom) return;
+      event.preventDefault();
+      const current = term.options.fontSize ?? 16;
+      term.options.fontSize = Math.max(10, Math.min(32, current + (event.deltaY < 0 ? 1 : -1)));
+      try {
+        fit.fit();
+      } catch {
+        // 布局尚未完成时忽略
+      }
+    };
+    host.addEventListener("wheel", onWheel, { passive: false });
+
+    // 选中即复制：可选行为，默认关闭，不影响 Ctrl+C。
+    const selectionSub = term.onSelectionChange(() => {
+      if (!useUiSettingsStore.getState().settings.terminal.copy_on_select) return;
+      const selection = term.getSelection();
+      if (selection) void navigator.clipboard.writeText(selection).catch(() => undefined);
+    });
+
     const doFit = () => {
       try {
         fit.fit();
       } catch {
         // 容器尚未布局完成时忽略
       }
-      // 串口没有 PTY 尺寸概念，不做远端 resize
-      if (sessionRef.current && !isSerial) {
+      // 串口没有 PTY 尺寸概念，Telnet 也不上报窗口大小，不做远端 resize
+      if (sessionRef.current && !isSerial && !isTelnet) {
         termResize(sessionRef.current, term.cols, term.rows).catch(() => undefined);
       }
     };
@@ -400,6 +456,14 @@ export function TerminalPane({ tabId, pane, active }: Props) {
     };
 
     let seedTimer: number | undefined;
+    const closeSession = (session: string) => {
+      const request = isSerial
+        ? serialClose(session)
+        : isTelnet
+          ? telnetClose(session)
+          : termClose(session);
+      request.catch(() => undefined);
+    };
     const dataSub = term.onData((data) => {
       const session = sessionRef.current;
       if (isSerial) {
@@ -409,6 +473,14 @@ export function TerminalPane({ tabId, pane, active }: Props) {
         if (session) {
           serialInput(session, bytes).catch((error) => {
             term.writeln(`\r\n\x1b[31m写入串口失败: ${errorText(error)}\x1b[0m`);
+          });
+        }
+        return;
+      }
+      if (isTelnet) {
+        if (session) {
+          telnetInput(session, new TextEncoder().encode(data)).catch((error) => {
+            term.writeln(`\r\n\x1b[31m写入 Telnet 失败: ${errorText(error)}\x1b[0m`);
           });
         }
         return;
@@ -431,7 +503,7 @@ export function TerminalPane({ tabId, pane, active }: Props) {
       const previous = sessionRef.current;
       if (previous) {
         sessionRef.current = null;
-        (isSerial ? serialClose(previous) : termClose(previous)).catch(() => undefined);
+        closeSession(previous);
       }
       setPaneStatus(tabId, pane.key, "connecting", "连接中…");
       const onEvent = (event: TermEvent) => {
@@ -447,16 +519,29 @@ export function TerminalPane({ tabId, pane, active }: Props) {
             } else if (event.state.state === "authenticating") {
               setPaneStatus(tabId, pane.key, "connecting", "认证中…");
             } else if (event.state.state === "ready") {
+              setAuthPrompt(null);
               setPaneStatus(tabId, pane.key, "ready", "已连接");
               window.setTimeout(doFit, 60);
             } else if (event.state.state === "closed") {
+              setAuthPrompt(null);
               setPaneStatus(tabId, pane.key, "closed", event.state.reason ?? "已断开");
             }
+            break;
+          case "auth_prompt":
+            setAuthPrompt({
+              promptId: event.prompt_id,
+              name: event.name,
+              instructions: event.instructions,
+              prompts: event.prompts,
+              values: event.prompts.map(() => ""),
+            });
+            setPaneStatus(tabId, pane.key, "connecting", "等待认证输入…");
             break;
           case "title":
             setPaneTitle(tabId, pane.key, event.title);
             break;
           case "exit":
+            setAuthPrompt(null);
             setPaneStatus(
               tabId,
               pane.key,
@@ -465,6 +550,7 @@ export function TerminalPane({ tabId, pane, active }: Props) {
             );
             break;
           case "error":
+            setAuthPrompt(null);
             setPaneStatus(tabId, pane.key, "error", event.message);
             term.writeln(`\r\n\x1b[31m[${event.code}] ${event.message}\x1b[0m`);
             break;
@@ -474,13 +560,15 @@ export function TerminalPane({ tabId, pane, active }: Props) {
       try {
         const session = isSerial
           ? await serialOpen(pane.profileId, onEvent)
-          : await termOpen(pane.profileId, onEvent);
+          : isTelnet
+            ? await telnetOpen(pane.profileId, onEvent)
+            : await termOpen(pane.profileId, onEvent);
         if (disposedRef.current) {
-          (isSerial ? serialClose(session) : termClose(session)).catch(() => undefined);
+          closeSession(session);
           return;
         }
         if (current !== generation) {
-          (isSerial ? serialClose(session) : termClose(session)).catch(() => undefined);
+          closeSession(session);
           return;
         }
         sessionRef.current = session;
@@ -518,6 +606,8 @@ export function TerminalPane({ tabId, pane, active }: Props) {
       if (seedTimer) window.clearTimeout(seedTimer);
       window.cancelAnimationFrame(raf);
       observer.disconnect();
+      host.removeEventListener("wheel", onWheel);
+      selectionSub.dispose();
       completionsRef.current = [];
       setCompletions([]);
       setCompletionPos(null);
@@ -529,7 +619,7 @@ export function TerminalPane({ tabId, pane, active }: Props) {
       const session = sessionRef.current;
       sessionRef.current = null;
       if (session) {
-        (isSerial ? serialClose(session) : termClose(session)).catch(() => undefined);
+        closeSession(session);
       }
       terminalRegistry.unregister(pane.key);
       term.dispose();
@@ -551,6 +641,33 @@ export function TerminalPane({ tabId, pane, active }: Props) {
     }, 30);
     return () => window.clearTimeout(timer);
   }, [active]);
+
+  // 设置页修改字体/字号/行高/光标后，实时作用到已打开且仍存活的 xterm。
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.fontFamily = liveTerminal.font_family;
+    term.options.fontWeight = fontWeight(liveTerminal.normal_weight);
+    term.options.fontWeightBold = fontWeight(liveTerminal.bold_weight);
+    term.options.fontSize = liveTerminal.font_size;
+    term.options.lineHeight = liveTerminal.line_height;
+    term.options.letterSpacing = liveTerminal.letter_spacing;
+    term.options.cursorBlink = liveTerminal.cursor_blink;
+    term.options.cursorStyle = liveTerminal.cursor_style as "bar" | "block" | "underline";
+    term.options.cursorInactiveStyle = liveTerminal.inactive_cursor_style as
+      | "none"
+      | "outline"
+      | "block"
+      | "bar"
+      | "underline";
+    term.options.scrollback = liveTerminal.scrollback;
+    term.options.theme = buildTheme(liveThemeColor);
+    try {
+      fitRef.current?.fit();
+    } catch {
+      /* ignore */
+    }
+  }, [liveTerminal, liveThemeColor]);
 
   const showOverlay = pane.status === "connecting" || pane.status === "closed" || pane.status === "error";
 
@@ -585,10 +702,19 @@ export function TerminalPane({ tabId, pane, active }: Props) {
   };
 
   const copySelection = () => {
-    if (ctxMenu?.selection) {
-      void navigator.clipboard.writeText(ctxMenu.selection).catch(() => undefined);
+    const selection = ctxMenu?.selection || termRef.current?.getSelection() || "";
+    if (selection) {
+      void navigator.clipboard.writeText(selection).catch(() => undefined);
     }
     closeMenu();
+  };
+
+  const openSearchBox = () => {
+    setSearchOpen(true);
+    window.setTimeout(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    }, 30);
   };
 
   const pasteClipboard = async () => {
@@ -641,8 +767,8 @@ export function TerminalPane({ tabId, pane, active }: Props) {
       const term = termRef.current;
       if (!term) return;
       const delta = Number((event as CustomEvent<number>).detail) || 0;
-      const current = term.options.fontSize ?? 13;
-      term.options.fontSize = Math.max(10, Math.min(22, current + delta));
+      const current = term.options.fontSize ?? 16;
+      term.options.fontSize = Math.max(10, Math.min(32, current + delta));
       try {
         fitRef.current?.fit();
       } catch {
@@ -657,6 +783,11 @@ export function TerminalPane({ tabId, pane, active }: Props) {
   /** 打开终端右键菜单；菜单项顺序参考 Xterminal 终端右键菜单。 */
   const openMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
     event.preventDefault();
+    // 右键行为可在设置中改为直接粘贴。
+    if (useUiSettingsStore.getState().settings.terminal.right_click === "paste") {
+      void pasteClipboard();
+      return;
+    }
     const term = termRef.current;
     const selection = term?.getSelection() ?? "";
     const rect = event.currentTarget.closest(".terminal-pane")?.getBoundingClientRect();
@@ -678,6 +809,25 @@ export function TerminalPane({ tabId, pane, active }: Props) {
     if (session) serialSetLines(session, next.dtr, next.rts).catch(() => undefined);
   };
 
+  const submitAuth = async (responses: string[] | null) => {
+    const current = authPrompt;
+    if (!current) return;
+    setAuthPrompt(null);
+    try {
+      await termAuthRespond(current.promptId, responses);
+    } catch (error) {
+      setPaneStatus(tabId, pane.key, "error", errorText(error));
+      termRef.current?.writeln(`\r\n\x1b[31m认证提示提交失败: ${errorText(error)}\x1b[0m`);
+    }
+  };
+
+  const setAuthValue = (index: number, value: string) =>
+    setAuthPrompt((prev) =>
+      prev
+        ? { ...prev, values: prev.values.map((item, i) => (i === index ? value : item)) }
+        : prev,
+    );
+
   return (
     <div
       className={`terminal-pane${active ? " is-active" : ""}`}
@@ -685,7 +835,13 @@ export function TerminalPane({ tabId, pane, active }: Props) {
     >
       <div className="pane-head">
         <span className={`proto-tag ${profile?.protocol ?? "ssh"}`}>
-          {profile?.protocol === "rdp" ? "RDP" : profile?.protocol === "serial" ? "SER" : "SSH"}
+          {profile?.protocol === "rdp"
+            ? "RDP"
+            : profile?.protocol === "serial"
+              ? "SER"
+              : profile?.protocol === "telnet"
+                ? "TEL"
+                : "SSH"}
         </span>
         <span className="pane-name">{pane.profileName}</span>
         {isSerial && (
@@ -713,6 +869,29 @@ export function TerminalPane({ tabId, pane, active }: Props) {
         <span className="pane-state">
           <span className={`dot st-${pane.status}`} />
           {pane.statusText}
+        </span>
+        <span className="pane-tools" onMouseDown={(event) => event.stopPropagation()}>
+          <button className="pane-tool" title="搜索终端内容" onClick={openSearchBox}>
+            <Icon name="search" size={12} />
+          </button>
+          <button className="pane-tool" title="复制选区" onClick={copySelection}>
+            <Icon name="copy" size={12} />
+          </button>
+          <button className="pane-tool" title="粘贴剪贴板" onClick={() => void pasteClipboard()}>
+            <Icon name="import" size={12} />
+          </button>
+          <button className="pane-tool" title="清屏" onClick={clearScreen}>
+            <Icon name="trash" size={12} />
+          </button>
+          <button className="pane-tool" title="水平切分" onClick={() => splitHere("row")}>
+            <Icon name="split" size={12} />
+          </button>
+          <button className="pane-tool" title="垂直切分" onClick={() => splitHere("column")}>
+            <Icon name="panel" size={12} />
+          </button>
+          <button className="pane-tool" title="重新连接" onClick={() => reconnectRef.current()}>
+            <Icon name="refresh" size={12} />
+          </button>
         </span>
       </div>
       <div className="terminal-host" ref={hostRef} onContextMenu={openMenu} />
@@ -759,22 +938,28 @@ export function TerminalPane({ tabId, pane, active }: Props) {
           onMouseDown={(event) => event.stopPropagation()}
         >
           <button className="term-menu-item" disabled={!ctxMenu.hasSelection} onMouseDown={copySelection}>
+            <Icon name="copy" size={13} />
             复制
           </button>
           <button className="term-menu-item" onMouseDown={() => void pasteClipboard()}>
+            <Icon name="import" size={13} />
             粘贴
           </button>
           <button className="term-menu-item" onMouseDown={selectAll}>
+            <Icon name="check" size={13} />
             全选
           </button>
           <button className="term-menu-item" onMouseDown={clearScreen}>
+            <Icon name="trash" size={13} />
             清屏
           </button>
           <div className="term-menu-sep" />
           <button className="term-menu-item" onMouseDown={() => splitHere("row")}>
+            <Icon name="split" size={13} />
             水平切分
           </button>
           <button className="term-menu-item" onMouseDown={() => splitHere("column")}>
+            <Icon name="panel" size={13} />
             垂直切分
           </button>
           <button
@@ -784,10 +969,12 @@ export function TerminalPane({ tabId, pane, active }: Props) {
               reconnectRef.current();
             }}
           >
+            <Icon name="refresh" size={13} />
             重新连接
           </button>
           <div className="term-menu-sep" />
           <button className="term-menu-item" disabled={!ctxMenu.hasSelection} onMouseDown={askAi}>
+            <Icon name="spark" size={13} />
             问 AI
           </button>
         </div>
@@ -820,7 +1007,57 @@ export function TerminalPane({ tabId, pane, active }: Props) {
           ))}
         </div>
       )}
-      {showOverlay && (
+      {authPrompt && (
+        <div className="auth-mask">
+          <div className="auth-dialog" role="dialog" aria-modal="true">
+            <div className="auth-head">
+              交互认证
+              <span className="auth-target">{pane.profileName}</span>
+            </div>
+            <div className="auth-body">
+              {authPrompt.name && <p className="auth-prompt-name">{authPrompt.name}</p>}
+              {authPrompt.instructions && (
+                <pre className="auth-instructions">{authPrompt.instructions}</pre>
+              )}
+              {authPrompt.prompts.map((item, index) => (
+                <label key={`${index}-${item.prompt}`} className="auth-field">
+                  {item.prompt || `第 ${index + 1} 项输入`}
+                  <input
+                    autoFocus={index === 0}
+                    type={item.echo ? "text" : "password"}
+                    value={authPrompt.values[index] ?? ""}
+                    spellCheck={false}
+                    onChange={(event) => setAuthValue(index, event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && authPrompt.values.every(Boolean)) {
+                        event.preventDefault();
+                        void submitAuth(authPrompt.values);
+                      }
+                    }}
+                  />
+                </label>
+              ))}
+              <p className="muted">
+                服务端每一轮提示都需要逐项输入；取消或 120 秒未操作将按认证失败处理。
+              </p>
+            </div>
+            <div className="auth-foot">
+              <span className="spacer" />
+              <button className="btn-ghost" onClick={() => void submitAuth(null)}>
+                取消连接
+              </button>
+              <button
+                className="btn-primary"
+                disabled={authPrompt.values.some((value) => !value)}
+                onClick={() => void submitAuth(authPrompt.values)}
+              >
+                提交
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showOverlay && !authPrompt && (
         <div className={`pane-overlay overlay-${pane.status}`}>
           <div className="ov-card">
             <span className="ov-icon">

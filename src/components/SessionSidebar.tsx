@@ -10,16 +10,34 @@ interface Props {
   onImport: () => void;
   onExport: () => void;
   onRdp: (profile: Profile) => void;
+  onOpenTunnel: (profile: Profile) => void;
   onNotice: (message: string, kind?: "info" | "error") => void;
   query: string;
   onQueryChange: (value: string) => void;
+  /** 顶部协议 tab 当前选中的协议，用于同步侧栏过滤与新建按钮文案。 */
+  proto?: ProtoFilter;
+  onCollapse?: () => void;
 }
 
-type ProtoFilter = "ssh" | "rdp" | "serial";
+type ProtoFilter = "ssh" | "rdp" | "serial" | "telnet" | "vnc" | "tunnel";
 
-const PROTO_LABEL: Record<ProtoFilter, string> = { ssh: "SSH", rdp: "RDP", serial: "串口" };
-const PROTO_TAG: Record<ProtoFilter, string> = { ssh: "SSH", rdp: "RDP", serial: "SER" };
-const ALL_PROTOS: ProtoFilter[] = ["ssh", "serial", "rdp"];
+const PROTO_LABEL: Record<ProtoFilter, string> = {
+  ssh: "SSH",
+  rdp: "RDP",
+  serial: "串口",
+  telnet: "Telnet",
+  vnc: "VNC",
+  tunnel: "隧道",
+};
+const PROTO_TAG: Record<ProtoFilter, string> = {
+  ssh: "SSH",
+  rdp: "RDP",
+  serial: "SER",
+  telnet: "TEL",
+  vnc: "VNC",
+  tunnel: "TUN",
+};
+const ALL_PROTOS: ProtoFilter[] = ["ssh", "serial", "rdp", "telnet", "vnc", "tunnel"];
 
 export function SessionSidebar({
   onNew,
@@ -27,9 +45,12 @@ export function SessionSidebar({
   onImport,
   onExport,
   onRdp,
+  onOpenTunnel,
   onNotice,
   query,
   onQueryChange,
+  proto,
+  onCollapse,
 }: Props) {
   const profiles = useAppStore((s) => s.profiles);
   const loading = useAppStore((s) => s.profilesLoading);
@@ -43,7 +64,22 @@ export function SessionSidebar({
     ssh: true,
     serial: true,
     rdp: true,
+    telnet: true,
+    vnc: true,
+    tunnel: true,
   });
+  // 顶部协议 tab 切换时，把侧栏过滤同步为单协议；底部勾选菜单仍可再改。
+  useEffect(() => {
+    if (!proto) return;
+    setEnabled({
+      ssh: proto === "ssh",
+      serial: proto === "serial",
+      rdp: proto === "rdp",
+      telnet: proto === "telnet",
+      vnc: proto === "vnc",
+      tunnel: proto === "tunnel",
+    });
+  }, [proto]);
   const [filterOpen, setFilterOpen] = useState(false);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -108,8 +144,19 @@ export function SessionSidebar({
             ? "rdp 远程桌面"
             : profile.protocol === "serial"
               ? "串口 serial"
-              : "ssh"
+              : profile.protocol === "tunnel"
+                ? "隧道 tunnel 端口转发"
+                : profile.protocol === "telnet"
+                  ? "telnet 明文"
+                  : profile.protocol === "vnc"
+                    ? "vnc 远程桌面 rfb"
+                    : "ssh"
           ).includes(keyword) ||
+          (profile.protocol === "tunnel"
+            ? `${profile.options.tunnel?.routes.length ?? 0} 条路由`
+                .toLowerCase()
+                .includes(keyword)
+            : false) ||
           (profile.protocol === "serial"
             ? `${profile.options.serial?.port ?? ""} ${profile.options.serial?.baud_rate ?? ""}`
                 .toLowerCase()
@@ -126,6 +173,9 @@ export function SessionSidebar({
       ssh: matches.filter((profile) => profile.protocol === "ssh").length,
       rdp: matches.filter((profile) => profile.protocol === "rdp").length,
       serial: matches.filter((profile) => profile.protocol === "serial").length,
+      telnet: matches.filter((profile) => profile.protocol === "telnet").length,
+      vnc: matches.filter((profile) => profile.protocol === "vnc").length,
+      tunnel: matches.filter((profile) => profile.protocol === "tunnel").length,
     }),
     [matches],
   );
@@ -157,6 +207,8 @@ export function SessionSidebar({
   const handleConnect = (profile: Profile) => {
     if (profile.protocol === "rdp") {
       onRdp(profile);
+    } else if (profile.protocol === "tunnel") {
+      onOpenTunnel(profile);
     } else {
       openProfileTab(profile);
     }
@@ -182,7 +234,8 @@ export function SessionSidebar({
     });
   };
 
-  const selectAll = () => setEnabled({ ssh: true, serial: true, rdp: true });
+  const selectAll = () =>
+    setEnabled({ ssh: true, serial: true, rdp: true, telnet: true, vnc: true, tunnel: true });
 
   const openContextMenu = (event: ReactMouseEvent) => {
     event.preventDefault();
@@ -198,6 +251,7 @@ export function SessionSidebar({
 
   const visibleCount = visible.length;
   const filterLabel = `${allSelected ? "全部" : selectedProtos.map((item) => PROTO_LABEL[item]).join(" + ")} · ${visibleCount}`;
+  const currentLabel = proto ? PROTO_LABEL[proto] : "新建";
   const emptyVariant: "none" | "search" | "hidden" | null =
     profiles.length === 0
       ? "none"
@@ -212,31 +266,40 @@ export function SessionSidebar({
   return (
     <aside className="sidebar" onContextMenu={openContextMenu}>
       <div className="sb-head">
-        <span className="sb-title">会话</span>
-        <span className="sb-count">{profiles.length}</span>
+        <button className="sb-collapse" title="收起会话列表 (Ctrl Shift B)" onClick={onCollapse}>
+          <Icon name="split" size={14} />
+          <span>收起</span>
+        </button>
         <div className="spacer" />
-        <button className="icon-btn sm" title="新建连接" onClick={onNew}>
-          <Icon name="plus" size={14} />
+        <button
+          className="sb-tool"
+          title="刷新会话列表"
+          onClick={() => void loadProfiles()}
+        >
+          <Icon name="refresh" size={13} />
         </button>
-      </div>
-
-      <div className="sb-actions">
-        <button className="btn-primary" onClick={onNew}>
-          <Icon name="plus" size={13} />
-          新建连接
-        </button>
-        <button className="btn-ghost" title="从加密配置导入（.fansshx / 旧版 .json）" onClick={onImport}>
-          <Icon name="import" size={13} />
-          导入
-        </button>
-        <button className="icon-btn sm" title="导出加密配置（.fansshx）" onClick={onExport}>
-          <Icon name="export" size={14} />
+        <button className="sb-tool sb-tool-primary" onClick={onNew} title={`新建 ${currentLabel} 连接`}>
+          <Icon name="plus" size={12} />
+          {currentLabel}
         </button>
       </div>
 
       <div className="sb-list">
         {loading && <div className="sb-hint">加载中…</div>}
         {error && <div className="sb-hint err">{error}</div>}
+        <div className="tree-all">
+            <Icon name="folder" size={13} />
+            <span className="tree-all-name">全部</span>
+            <span className="g-count">{visibleCount}</span>
+            <div className="spacer" />
+            <button
+              className="tree-all-gear"
+              title="按协议筛选会话"
+              onClick={() => setFilterOpen((open) => !open)}
+            >
+              <Icon name="gear" size={13} />
+            </button>
+          </div>
         {groups.map(([group, list]) => {
           const isCollapsed = collapsed[group] ?? false;
           return (
@@ -254,18 +317,48 @@ export function SessionSidebar({
                   <div
                     key={profile.id}
                     className={`session${activeProfileIds.has(profile.id) ? " is-open" : ""}`}
+                    draggable
+                    onDragStart={(event) => {
+                      // 行内操作按钮不触发拖拽，避免误把连接拖走。
+                      if ((event.target as HTMLElement).closest(".s-actions")) {
+                        event.preventDefault();
+                        return;
+                      }
+                      event.dataTransfer.setData("application/x-fanssh-profile", profile.id);
+                      event.dataTransfer.setData("text/plain", profile.name);
+                      event.dataTransfer.effectAllowed = "copy";
+                    }}
                     onDoubleClick={() => handleConnect(profile)}
-                    title={`双击连接 ${
-                      profile.protocol === "serial"
-                        ? `${profile.target.host} @ ${profile.options.serial?.baud_rate ?? ""}`
-                        : `${profile.target.user ? `${profile.target.user}@` : ""}${profile.target.host}:${profile.target.port}`
+                    title={`双击${
+                      profile.protocol === "tunnel"
+                        ? `打开隧道面板 · ${profile.options.tunnel?.routes.length ?? 0} 条路由`
+                        : profile.protocol === "serial"
+                          ? `连接 ${profile.target.host} @ ${profile.options.serial?.baud_rate ?? ""}`
+                          : `连接 ${profile.target.user ? `${profile.target.user}@` : ""}${profile.target.host}:${profile.target.port}`
                     }`}
                   >
-                    <span className={`proto-tag ${profile.protocol}`}>
-                      {PROTO_TAG[profile.protocol]}
+                    <span className={`s-icon ${profile.protocol}`}>
+                      <Icon
+                        name={
+                          profile.protocol === "serial"
+                            ? "plug"
+                            : profile.protocol === "rdp"
+                              ? "link"
+                              : profile.protocol === "tunnel"
+                                ? "transfer"
+                                : profile.protocol === "vnc"
+                                  ? "link"
+                                  : "term"
+                        }
+                        size={13}
+                      />
                     </span>
                     <span className="s-name">{profile.name}</span>
-                    <span className="s-host">{profile.target.host}</span>
+                    {profile.protocol !== "ssh" && (
+                      <span className={`proto-tag ${profile.protocol}`}>
+                        {PROTO_TAG[profile.protocol]}
+                      </span>
+                    )}
                     <span className={`s-dot ${activeProfileIds.has(profile.id) ? "on" : ""}`} />
                     <div className="s-actions">
                       <button className="mini" title="连接" onClick={() => handleConnect(profile)}>
@@ -303,7 +396,7 @@ export function SessionSidebar({
               <Icon name="folder" size={18} />
             </span>
             <div className="empty-title">还没有服务器配置</div>
-            <div className="empty-desc">添加第一台 SSH / 串口 / RDP 设备后即可双击连接</div>
+            <div className="empty-desc">添加第一台 SSH / Telnet / 串口 / RDP / 隧道 配置后即可双击连接</div>
             <button className="btn-primary sm" onClick={onNew}>
               新建连接
             </button>
