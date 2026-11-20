@@ -1,13 +1,14 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent } from "react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { appPlatform, errorText, profileExport, profileImport, rdpLaunch, updaterStatus } from "./api";
+import { appPlatform, errorText, profileExport, profileImport, updaterStatus } from "./api";
 import { AiSidebar } from "./components/AiSidebar";
 import { ActivityBar } from "./components/ActivityBar";
 import { DockerPanel } from "./components/DockerPanel";
 import { Icon } from "./components/Icon";
 import { MonitorPanel } from "./components/MonitorPanel";
 import { PassphraseDialog } from "./components/PassphraseDialog";
+import { RdpPane } from "./components/RdpPane";
 import { SessionDialog } from "./components/SessionDialog";
 import { SessionSidebar } from "./components/SessionSidebar";
 import { SettingsDialog } from "./components/SettingsDialog";
@@ -245,17 +246,9 @@ export default function App() {
     setDialogOpen(true);
   };
 
-  const handleRdp = async (profile: Profile) => {
-    if (platform !== "windows") {
-      notify("当前平台不支持 RDP 远程桌面，请在 Windows 客户端使用该配置。", "error");
-      return;
-    }
-    try {
-      const handle = await rdpLaunch(profile.id);
-      notify(`已生成 ${handle.rdp_file}，正在调用 mstsc.exe${handle.pid ? `（pid ${handle.pid}）` : ""}`);
-    } catch (error) {
-      notify(errorText(error), "error");
-    }
+  // Windows 与 Linux 共用内嵌 RDP 会话，不再调用 mstsc.exe。
+  const handleRdp = (profile: Profile) => {
+    openProfileTab(profile);
   };
 
   const handleSplit = () => {
@@ -511,32 +504,30 @@ export default function App() {
 
       <div className="protobar">
         <div className="proto-tabs" role="tablist">
-          {(["ssh", "serial", "rdp", "telnet", "vnc", "tunnel"] as Protocol[])
-            .filter((item) => item !== "rdp" || platform === "windows")
-            .map((item) => (
-              <button
-                key={item}
-                role="tab"
-                aria-selected={proto === item}
-                className={`proto-tab${proto === item ? " is-active" : ""}`}
-                onClick={() => {
-                  setProto(item);
-                  setSidebarOpen(true);
-                }}
-              >
-                {item === "ssh"
-                  ? "SSH"
-                  : item === "serial"
-                    ? "串口"
-                    : item === "tunnel"
-                      ? "隧道"
-                      : item === "telnet"
+          {(["ssh", "serial", "rdp", "telnet", "vnc", "tunnel"] as Protocol[]).map((item) => (
+            <button
+              key={item}
+              role="tab"
+              aria-selected={proto === item}
+              className={`proto-tab${proto === item ? " is-active" : ""}`}
+              onClick={() => {
+                setProto(item);
+                setSidebarOpen(true);
+              }}
+            >
+              {item === "ssh"
+                ? "SSH"
+                : item === "serial"
+                  ? "串口"
+                  : item === "tunnel"
+                    ? "隧道"
+                    : item === "telnet"
                       ? "Telnet"
                       : item === "vnc"
                         ? "VNC"
                         : "RDP"}
-              </button>
-            ))}
+            </button>
+          ))}
         </div>
         <div className="spacer" />
         <button className="proto-action" onClick={handleImport}>
@@ -636,6 +627,12 @@ export default function App() {
                       const content =
                         paneProfile?.protocol === "vnc" ? (
                           <VncPane
+                            tabId={tab.id}
+                            pane={pane}
+                            active={tab.id === activeTabId && index === tab.activePane}
+                          />
+                        ) : paneProfile?.protocol === "rdp" ? (
+                          <RdpPane
                             tabId={tab.id}
                             pane={pane}
                             active={tab.id === activeTabId && index === tab.activePane}

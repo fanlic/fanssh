@@ -323,7 +323,7 @@ function existingKeySecrets(profile: Profile | null): { key: string | null; pass
 }
 
 /**
- * RDP 密码是可选的：留空不写凭据，启动 mstsc 后由系统弹窗输入。
+ * RDP 密码是可选的：留空不写凭据，连接时由前端一次性弹窗输入（支持空密码）。
  * 填了则只写进 vault，profile 里只保留 secret id。
  */
 async function buildRdpAuth(
@@ -736,9 +736,6 @@ export function SessionDialog({
   };
 
   const presetId = matchSerialPreset(form.serial);
-  // RDP 依赖 Windows 的 mstsc.exe：非 Windows 不提供新建入口，编辑已有 RDP 配置时保留入口并提示。
-  const isWindows = platform === "windows";
-  const showRdpTab = isWindows || form.protocol === "rdp" || initial?.protocol === "rdp";
   const knownPort = ports.some((port) => port.port_name === form.serial.port);
   const portHint = portsLoading
     ? "正在枚举系统串口…"
@@ -838,19 +835,17 @@ export function SessionDialog({
             >
               串口
             </button>
-            {showRdpTab && (
-              <button
-                role="tab"
-                aria-selected={form.protocol === "rdp"}
-                className={form.protocol === "rdp" ? "is-active" : ""}
-                onClick={() => {
-                  update("protocol", "rdp");
-                  if (form.port === "22") update("port", "3389");
-                }}
-              >
-                RDP 远程桌面
-              </button>
-            )}
+            <button
+              role="tab"
+              aria-selected={form.protocol === "rdp"}
+              className={form.protocol === "rdp" ? "is-active" : ""}
+              onClick={() => {
+                update("protocol", "rdp");
+                if (form.port === "22") update("port", "3389");
+              }}
+            >
+              RDP 远程桌面
+            </button>
             <button
               role="tab"
               aria-selected={form.protocol === "telnet"}
@@ -885,12 +880,6 @@ export function SessionDialog({
             </button>
           </div>
 
-          {!isWindows && form.protocol === "rdp" && (
-            <p className="update-hint">
-              当前平台（{platform}）不支持 RDP 远程桌面：RDP 依赖 Windows 的 mstsc.exe。该配置可以保留，
-              在 Linux 上打开时会提示平台不支持，请到 Windows 客户端使用。
-            </p>
-          )}
           <div className="form-grid">
             <label>
               名称 *
@@ -1417,7 +1406,7 @@ export function SessionDialog({
 
           {form.protocol === "rdp" && (
             <div id="sec-rdp-auth">
-              <div className="section-title">登录凭据（写入 Windows 凭据管理器，不落配置文件）</div>
+              <div className="section-title">登录凭据（加密保存在本地凭据库，不落配置文件）</div>
               <div className="form-grid">
                 <label>
                   域 / 工作组（可选）
@@ -1429,7 +1418,7 @@ export function SessionDialog({
                 </label>
                 <label>
                   密码
-                  <span className="muted">（留空则启动后由 mstsc 弹窗输入）</span>
+                  <span className="muted">（留空则连接时一次性输入，支持空密码）</span>
                   <input
                     type="password"
                     value={form.password}
@@ -1957,7 +1946,7 @@ export function SessionDialog({
 
           {form.protocol === "rdp" && (
             <div id="sec-rdp">
-              <div className="section-title">RDP 参数（写入 .rdp 后调用 mstsc.exe）</div>
+              <div className="section-title">RDP 参数（Windows / Linux 共用内嵌会话，不调用 mstsc）</div>
               <div className="form-grid">
                 <label className="inline">
                   <input
@@ -1967,13 +1956,14 @@ export function SessionDialog({
                   />
                   全屏
                 </label>
-                <label className="inline">
+                <label className="inline" title="剪贴板重定向为后续批次，当前版本不生效">
                   <input
                     type="checkbox"
+                    disabled
                     checked={form.rdp.clipboard}
                     onChange={(e) => update("rdp", { ...form.rdp, clipboard: e.target.checked })}
                   />
-                  剪贴板
+                  剪贴板（后续批次）
                 </label>
                 <label>
                   宽度
@@ -1989,21 +1979,23 @@ export function SessionDialog({
                     onChange={(e) => update("rdp", { ...form.rdp, height: Number(e.target.value) || 0 })}
                   />
                 </label>
-                <label className="inline">
+                <label className="inline" title="多显示器为后续批次，当前版本不生效">
                   <input
                     type="checkbox"
+                    disabled
                     checked={form.rdp.multimon}
                     onChange={(e) => update("rdp", { ...form.rdp, multimon: e.target.checked })}
                   />
-                  多显示器
+                  多显示器（后续批次）
                 </label>
-                <label className="inline">
+                <label className="inline" title="磁盘映射为后续批次，当前版本不生效">
                   <input
                     type="checkbox"
+                    disabled
                     checked={form.rdp.drive_redirect}
                     onChange={(e) => update("rdp", { ...form.rdp, drive_redirect: e.target.checked })}
                   />
-                  映射本地磁盘
+                  映射本地磁盘（后续批次）
                 </label>
                 <label className="inline">
                   <input
@@ -2013,14 +2005,20 @@ export function SessionDialog({
                   />
                   管理员会话
                 </label>
-                <label>
-                  RD 网关（可选）
+                <label title="RD 网关暂不支持（mstsc 支持，内嵌会话为后续批次）">
+                  RD 网关（暂不支持）
                   <input
                     value={form.rdp.gateway ?? ""}
+                    disabled
                     onChange={(e) => update("rdp", { ...form.rdp, gateway: e.target.value })}
                   />
                 </label>
               </div>
+              <p className="serial-hint">
+                内嵌会话首批支持分辨率、域、NLA/CredSSP 登录与键鼠输入；空密码可手动输入。
+                剪贴板、多显示器、磁盘映射、音频、EGFX/H.264 为后续批次。
+                智能卡登录与 RD 网关在 mstsc 中可用，但内嵌会话暂不支持，请勿依赖这些配置连接。
+              </p>
             </div>
           )}
           </div>

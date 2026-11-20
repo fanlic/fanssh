@@ -108,7 +108,7 @@ pub struct RdpPrefs {
     pub admin_session: bool,
     #[serde(default)]
     pub gateway: Option<String>,
-    /// Windows 域/工作组，可选。写入 .rdp 与凭据管理器时拼成 `DOMAIN\user`。
+    /// Windows 域/工作组，可选。内嵌会话作为 CredSSP 的 domain 字段传给服务器。
     #[serde(default)]
     pub domain: Option<String>,
 }

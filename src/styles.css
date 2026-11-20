@@ -4144,6 +4144,41 @@ label.inline input[type="checkbox"] {
   font-size: 11px;
   color: var(--text-dim);
 }
+.rdp-foot-hint {
+  color: var(--text-faint);
+  font-size: 10px;
+}
+.rdp-password {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 320px;
+  text-align: center;
+}
+.rdp-password input {
+  width: 240px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-1);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+.rdp-password input:focus {
+  border-color: var(--accent-line);
+}
+.rdp-password-actions {
+  display: flex;
+  gap: 8px;
+}
+.rdp-password-hint {
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
 
 /* ---------- 标签栏左侧菜单 / 拖拽排序 ---------- */
 .tab-menu-wrap {

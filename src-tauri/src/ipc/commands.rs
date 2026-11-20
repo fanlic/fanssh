@@ -9,9 +9,9 @@ use crate::app::settings::{AiSettingsFile, UiSettings};
 use crate::app::AppState;
 use crate::docker::{self, DockerContainer, DockerLogs};
 use crate::ipc::dto::{
-    AiChatRequest, AiSettingsInput, AiSettingsView, Nl2CmdResult, RdpHandleDto, RemoteEntry,
-    SerialPortInfo, SftpOpResult, SftpOpenResp, SftpTextFile, TermEvent, TransferEvent,
-    UpdateEvent, UpdateInfoDto, UpdaterStatusDto, VncEvent, VncInputDto,
+    AiChatRequest, AiSettingsInput, AiSettingsView, Nl2CmdResult, RdpEvent,
+    RdpInputDto, RemoteEntry, SerialPortInfo, SftpOpResult, SftpOpenResp, SftpTextFile,
+    TermEvent, TransferEvent, UpdateEvent, UpdateInfoDto, UpdaterStatusDto, VncEvent, VncInputDto,
 };
 use crate::ipc::error::{AppError, AppResult};
 use crate::monitor::MonitorEvent;
@@ -725,27 +725,45 @@ fn read_api_key(
 // RDP
 // ---------------------------------------------------------------------------
 
+/// 打开内嵌 RDP 会话（Windows / Linux 共用）。密码优先使用本次一次性输入，其次从 vault 解密；
+/// 两者都没有时返回 rdp.password_required，由前端弹一次性密码框后重试。
 #[tauri::command]
-pub async fn rdp_launch(
+pub async fn rdp_open(
     state: State<'_, AppState>,
     profile_id: Uuid,
-) -> AppResult<RdpHandleDto> {
+    password: Option<String>,
+    on_event: TauriChannel<RdpEvent>,
+    on_frame: TauriChannel<tauri::ipc::InvokeResponseBody>,
+) -> AppResult<SessionId> {
     let profile = state
         .profiles
         .get(&profile_id)
-        .ok_or_else(|| AppError::new("profile.not_found", "服务器配置不存在"))?;
+        .ok_or_else(|| AppError::new("profile.not_found", "RDP 配置不存在"))?;
     if !matches!(profile.protocol, Protocol::Rdp) {
         return Err(AppError::new(
             "rdp.invalid_profile",
-            "该配置不是 RDP 协议，请先在配置中选择 RDP",
+            "该配置不是 RDP 协议，无法打开远程桌面",
         ));
     }
-    // RDP 密码同样只从 vault 解密到内存，交给凭据管理器写入；没填密码就交给 mstsc 弹窗。
-    let password = match &profile.auth {
-        AuthRef::Password { secret } => Some(state.vault.get(secret)?.to_string()),
-        _ => None,
-    };
-    crate::transport::rdp::launch(&profile, password.as_deref(), &state.data_dir)
+    let vault = state.vault.clone();
+    state
+        .rdp
+        .open(profile, vault, password, on_event, on_frame)
+        .await
+}
+
+#[tauri::command]
+pub async fn rdp_input(
+    state: State<'_, AppState>,
+    session: SessionId,
+    input: RdpInputDto,
+) -> AppResult<()> {
+    state.rdp.input(session, input).await
+}
+
+#[tauri::command]
+pub async fn rdp_close(state: State<'_, AppState>, session: SessionId) -> AppResult<()> {
+    state.rdp.close(session).await
 }
 
 // ---------------------------------------------------------------------------

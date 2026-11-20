@@ -122,6 +122,19 @@ export type VncInput =
   | { type: "pointer"; mask: number; x: number; y: number }
   | { type: "key"; down: boolean; keysym: number };
 
+export type RdpState = "connecting" | "ready" | "closed" | "error";
+
+/** 内嵌 RDP 事件；画面数据走独立的原始字节通道。 */
+export type RdpEvent =
+  | { type: "state"; state: RdpState; message: string | null }
+  | { type: "size"; width: number; height: number; name: string }
+  | { type: "exit"; reason: string | null };
+
+/** mask 与 VNC 一致：1 左键、2 中键、4 右键、8 上滚、16 下滚。 */
+export type RdpInput =
+  | { type: "pointer"; mask: number; x: number; y: number }
+  | { type: "key"; down: boolean; scancode: number };
+
 /** Telnet 按键映射；标准模式不做任何转换。 */
 export interface TelnetPrefs {
   enable_mapping: boolean;
@@ -338,11 +351,6 @@ export interface Nl2CmdResult {
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
-}
-
-export interface RdpHandleDto {
-  pid: number | null;
-  rdp_file: string;
 }
 
 export interface UpdaterStatus {

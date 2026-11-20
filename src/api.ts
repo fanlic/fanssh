@@ -8,7 +8,6 @@ import type {
   MonitorEvent,
   Nl2CmdResult,
   Profile,
-  RdpHandleDto,
   RemoteEntry,
   SerialPortInfo,
   SftpConflict,
@@ -354,6 +353,44 @@ export function vncClose(session: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// RDP（Windows / Linux 共用内嵌会话）
+// ---------------------------------------------------------------------------
+
+/** password 只在内存中传给后端，不落盘；vault 已有密码时传 null 即可。 */
+export async function rdpOpen(
+  profileId: string,
+  password: string | null,
+  onEvent: (event: import("./types").RdpEvent) => void,
+  onFrame: (frame: ArrayBuffer) => void,
+): Promise<string> {
+  const eventChannel = new Channel<import("./types").RdpEvent>();
+  eventChannel.onmessage = onEvent;
+  const frameChannel = new Channel<ArrayBuffer>();
+  frameChannel.onmessage = (message) => {
+    if (message instanceof ArrayBuffer) {
+      onFrame(message);
+    } else if (ArrayBuffer.isView(message)) {
+      const view = message as ArrayBufferView;
+      onFrame(view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength) as ArrayBuffer);
+    }
+  };
+  return invoke("rdp_open", {
+    profileId,
+    password,
+    onEvent: eventChannel,
+    onFrame: frameChannel,
+  });
+}
+
+export function rdpInput(session: string, input: import("./types").RdpInput): Promise<void> {
+  return invoke("rdp_input", { session, input });
+}
+
+export function rdpClose(session: string): Promise<void> {
+  return invoke("rdp_close", { session });
+}
+
+// ---------------------------------------------------------------------------
 // 端口转发 / 隧道
 // ---------------------------------------------------------------------------
 
@@ -373,14 +410,6 @@ export function tunnelStop(routeId: string): Promise<void> {
 
 export function tunnelActive(): Promise<string[]> {
   return invoke("tunnel_active");
-}
-
-// ---------------------------------------------------------------------------
-// RDP
-// ---------------------------------------------------------------------------
-
-export function rdpLaunch(profileId: string): Promise<RdpHandleDto> {
-  return invoke("rdp_launch", { profileId });
 }
 
 // ---------------------------------------------------------------------------

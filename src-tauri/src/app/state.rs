@@ -9,6 +9,7 @@ use crate::monitor::MonitorManager;
 use crate::profile::ProfileStore;
 use crate::serial::SerialManager;
 use crate::session::manager::SshManager;
+use crate::transport::rdp::RdpManager;
 use crate::transport::sftp::SftpManager;
 use crate::transport::telnet::TelnetManager;
 use crate::transport::vnc::VncManager;
@@ -25,6 +26,7 @@ pub struct AppState {
     pub sftp: SftpManager,
     pub telnet: TelnetManager,
     pub vnc: VncManager,
+    pub rdp: RdpManager,
     pub tunnel: TunnelManager,
     pub monitor: MonitorManager,
     pub http: reqwest::Client,
@@ -52,6 +54,7 @@ impl AppState {
             sftp: SftpManager::default(),
             telnet: TelnetManager::default(),
             vnc: VncManager::default(),
+            rdp: RdpManager::default(),
             tunnel: TunnelManager::default(),
             monitor: MonitorManager::default(),
             http,

@@ -119,6 +119,41 @@ pub enum VncInputDto {
     Key { down: bool, keysym: u32 },
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RdpState {
+    Connecting,
+    Ready,
+    Closed,
+    Error,
+}
+
+/// 内嵌 RDP 控制事件；画面数据单独走原始字节通道（8 字节头 + RGBA）。
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RdpEvent {
+    State {
+        state: RdpState,
+        message: Option<String>,
+    },
+    Size {
+        width: u16,
+        height: u16,
+        name: String,
+    },
+    Exit {
+        reason: Option<String>,
+    },
+}
+
+/// 前端发来的 RDP 输入。键盘使用 PC 扫描码，扩展键用 0xE000 高位标记。
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RdpInputDto {
+    Pointer { mask: u8, x: u16, y: u16 },
+    Key { down: bool, scancode: u16 },
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TransferEvent {
@@ -266,12 +301,6 @@ pub struct AiChatRequest {
     pub kind: String,
     #[serde(default)]
     pub context: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct RdpHandleDto {
-    pub pid: Option<u32>,
-    pub rdp_file: String,
 }
 
 // ---------------------------------------------------------------------------

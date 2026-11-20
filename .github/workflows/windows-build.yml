@@ -321,8 +321,8 @@ jobs:
 
             ## 本版本状态
 
-            这是 v1 骨架的首个可运行构建：SSH 终端、会话管理、SFTP、AI 侧边栏、RDP 调用均已实现；
-            仍存在已知缺口（SSH 未接 known_hosts、AI 非流式、SFTP 无断点续传等），详见仓库 README。
+            这是 v1 骨架的预览构建：SSH 终端、会话管理、SFTP、AI 侧边栏、内嵌 RDP 均已接入；
+            仍存在已知缺口（SSH 未接 known_hosts、AI 非流式、RDP 剪贴板/多显示器/音频暂未接入等），详见仓库 README。
           files: |
             dist-artifacts/fanssh-nsis-installer/*.exe
             dist-artifacts/fanssh-portable-windows-x64/*.zip
