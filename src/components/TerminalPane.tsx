@@ -702,10 +702,19 @@ export function TerminalPane({ tabId, pane, active }: Props) {
   };
 
   const copySelection = () => {
-    if (ctxMenu?.selection) {
-      void navigator.clipboard.writeText(ctxMenu.selection).catch(() => undefined);
+    const selection = ctxMenu?.selection || termRef.current?.getSelection() || "";
+    if (selection) {
+      void navigator.clipboard.writeText(selection).catch(() => undefined);
     }
     closeMenu();
+  };
+
+  const openSearchBox = () => {
+    setSearchOpen(true);
+    window.setTimeout(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    }, 30);
   };
 
   const pasteClipboard = async () => {
@@ -860,6 +869,29 @@ export function TerminalPane({ tabId, pane, active }: Props) {
         <span className="pane-state">
           <span className={`dot st-${pane.status}`} />
           {pane.statusText}
+        </span>
+        <span className="pane-tools" onMouseDown={(event) => event.stopPropagation()}>
+          <button className="pane-tool" title="搜索终端内容" onClick={openSearchBox}>
+            <Icon name="search" size={12} />
+          </button>
+          <button className="pane-tool" title="复制选区" onClick={copySelection}>
+            <Icon name="copy" size={12} />
+          </button>
+          <button className="pane-tool" title="粘贴剪贴板" onClick={() => void pasteClipboard()}>
+            <Icon name="import" size={12} />
+          </button>
+          <button className="pane-tool" title="清屏" onClick={clearScreen}>
+            <Icon name="trash" size={12} />
+          </button>
+          <button className="pane-tool" title="水平切分" onClick={() => splitHere("row")}>
+            <Icon name="split" size={12} />
+          </button>
+          <button className="pane-tool" title="垂直切分" onClick={() => splitHere("column")}>
+            <Icon name="panel" size={12} />
+          </button>
+          <button className="pane-tool" title="重新连接" onClick={() => reconnectRef.current()}>
+            <Icon name="refresh" size={12} />
+          </button>
         </span>
       </div>
       <div className="terminal-host" ref={hostRef} onContextMenu={openMenu} />

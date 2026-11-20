@@ -4757,3 +4757,36 @@ body.is-resizing {
   overflow-wrap: anywhere;
   color: var(--muted);
 }
+
+.pane-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.terminal-pane:hover .pane-tools,
+.terminal-pane.is-active .pane-tools {
+  opacity: 1;
+}
+
+.pane-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.pane-tool:hover {
+  border-color: var(--border);
+  background: var(--hover);
+  color: var(--text);
+}
