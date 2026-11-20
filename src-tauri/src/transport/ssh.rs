@@ -10,6 +10,7 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use uuid::Uuid;
 
 use crate::ipc::dto::{AuthPromptItem, TermEvent};
+use crate::known_hosts::KnownHosts;
 use crate::session::model::{AuthRef, Profile, Target};
 use crate::transport::proxy;
 use crate::vault::Vault;
@@ -54,7 +55,10 @@ impl AuthPrompts {
             Ok(Err(_)) => bail!("交互认证会话已关闭"),
             Err(_) => {
                 self.pending.lock().await.remove(&prompt_id);
-                bail!("等待交互认证输入超时（{} 秒）", AUTH_PROMPT_TIMEOUT.as_secs())
+                bail!(
+                    "等待交互认证输入超时（{} 秒）",
+                    AUTH_PROMPT_TIMEOUT.as_secs()
+                )
             }
         }
     }
@@ -80,6 +84,9 @@ pub struct AuthUi<'a> {
 
 pub struct ClientHandler {
     label: String,
+    host: String,
+    port: u16,
+    known_hosts: Arc<KnownHosts>,
     /// 远程端口转发：服务端每接受一个连接就打开 forwarded-tcpip 通道，
     /// 这里接受通道后交给隧道任务处理。没有隧道时直接拒绝。
     forward_tx: Option<mpsc::UnboundedSender<Channel<russh::client::Msg>>>,
@@ -87,11 +94,15 @@ pub struct ClientHandler {
 
 impl ClientHandler {
     fn new(
-        label: impl Into<String>,
+        target: &Target,
+        known_hosts: Arc<KnownHosts>,
         forward_tx: Option<mpsc::UnboundedSender<Channel<russh::client::Msg>>>,
     ) -> Self {
         Self {
-            label: label.into(),
+            label: format!("{}:{}", target.host, target.port),
+            host: target.host.clone(),
+            port: target.port,
+            known_hosts,
             forward_tx,
         }
     }
@@ -104,11 +115,23 @@ impl client::Handler for ClientHandler {
         &mut self,
         server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
-        // v1 骨架：接受并记录主机密钥，尚未实现 known_hosts 持久化校验。
+        let key = server_public_key.public_key();
+        let algorithm = key.algorithm().as_str().to_string();
+        let fingerprint = key.fingerprint(Default::default()).to_string();
+        if let Err(error) = self.known_hosts.verify_or_trust(
+            &self.host,
+            self.port,
+            algorithm.clone(),
+            fingerprint.clone(),
+        ) {
+            log::warn!("[ssh] {} 主机密钥校验失败: {error:#}", self.label);
+            return Ok(false);
+        }
         log::info!(
-            "[ssh] {} 主机密钥: {:?}",
+            "[ssh] {} 主机密钥已验证: {} {}",
             self.label,
-            server_public_key
+            algorithm,
+            fingerprint
         );
         Ok(true)
     }
@@ -156,15 +179,17 @@ pub struct ConnectedSsh {
 pub async fn connect_profile(
     profile: &Profile,
     vault: &Vault,
+    known_hosts: Arc<KnownHosts>,
     auth_ui: Option<AuthUi<'_>>,
 ) -> Result<ConnectedSsh> {
-    connect_profile_with_forward(profile, vault, auth_ui, None).await
+    connect_profile_with_forward(profile, vault, known_hosts, auth_ui, None).await
 }
 
 /// 与 `connect_profile` 相同，额外把服务端打开的远程转发通道交给 `forward_tx`。
 pub async fn connect_profile_with_forward(
     profile: &Profile,
     vault: &Vault,
+    known_hosts: Arc<KnownHosts>,
     auth_ui: Option<AuthUi<'_>>,
     forward_tx: Option<mpsc::UnboundedSender<Channel<russh::client::Msg>>>,
 ) -> Result<ConnectedSsh> {
@@ -194,7 +219,8 @@ pub async fn connect_profile_with_forward(
         handle = connect_stream_timeout(
             config.clone(),
             stream,
-            &first.target.host,
+            &first.target,
+            known_hosts.clone(),
             timeout,
             "连接跳板机",
             forward_tx.clone(),
@@ -216,7 +242,8 @@ pub async fn connect_profile_with_forward(
             let mut next = connect_stream_timeout(
                 config.clone(),
                 channel.into_stream(),
-                &hop.target.host,
+                &hop.target,
+                known_hosts.clone(),
                 timeout,
                 "通过跳板建立连接",
                 forward_tx.clone(),
@@ -240,7 +267,8 @@ pub async fn connect_profile_with_forward(
         let mut next = connect_stream_timeout(
             config.clone(),
             channel.into_stream(),
-            &profile.target.host,
+            &profile.target,
+            known_hosts.clone(),
             timeout,
             "通过跳板连接目标主机",
             forward_tx.clone(),
@@ -250,17 +278,13 @@ pub async fn connect_profile_with_forward(
         intermediates.push(handle);
         handle = next;
     } else {
-        let stream = proxy::tcp_connect(
-            &profile.target.host,
-            profile.target.port,
-            &prefs,
-            timeout,
-        )
-        .await?;
+        let stream =
+            proxy::tcp_connect(&profile.target.host, profile.target.port, &prefs, timeout).await?;
         handle = connect_stream_timeout(
             config.clone(),
             stream,
-            &profile.target.host,
+            &profile.target,
+            known_hosts,
             timeout,
             "建立 SSH 连接",
             forward_tx.clone(),
@@ -278,7 +302,8 @@ pub async fn connect_profile_with_forward(
 async fn connect_stream_timeout<S>(
     config: Arc<client::Config>,
     stream: S,
-    label: &str,
+    target: &Target,
+    known_hosts: Arc<KnownHosts>,
     timeout: Duration,
     what: &str,
     forward_tx: Option<mpsc::UnboundedSender<Channel<russh::client::Msg>>>,
@@ -288,7 +313,11 @@ where
 {
     tokio::time::timeout(
         timeout,
-        client::connect_stream(config, stream, ClientHandler::new(label, forward_tx)),
+        client::connect_stream(
+            config,
+            stream,
+            ClientHandler::new(target, known_hosts, forward_tx),
+        ),
     )
     .await
     .map_err(|_| anyhow!("{what}超时（{}ms）", timeout.as_millis()))?
@@ -355,17 +384,12 @@ async fn authenticate(
                 .await
                 .context("公钥认证请求失败")?;
             if !result.success() {
-                bail!(
-                    "认证失败：{}@{} 拒绝了该密钥",
-                    target.user,
-                    target.host
-                );
+                bail!("认证失败：{}@{} 拒绝了该密钥", target.user, target.host);
             }
         }
         AuthRef::KeyboardInteractive => {
-            let ui = auth_ui.ok_or_else(|| {
-                anyhow!("该服务器要求键盘交互认证，但当前入口无法弹出输入框")
-            })?;
+            let ui = auth_ui
+                .ok_or_else(|| anyhow!("该服务器要求键盘交互认证，但当前入口无法弹出输入框"))?;
             let mut response = handle
                 .authenticate_keyboard_interactive_start(target.user.as_str(), None::<String>)
                 .await

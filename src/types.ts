@@ -432,6 +432,15 @@ export interface ShortcutSettings {
   toggle_sidebar: string;
 }
 
+export interface KnownHostEntry {
+  host: string;
+  port: number;
+  algorithm: string;
+  fingerprint: string;
+  first_seen: number;
+  last_seen: number;
+}
+
 export interface UiSettings {
   appearance: AppearanceSettings;
   terminal: TerminalUiSettings;

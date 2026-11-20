@@ -5,6 +5,7 @@ use std::time::Duration;
 use tauri::Manager;
 
 use crate::app::settings::SettingsStore;
+use crate::known_hosts::KnownHosts;
 use crate::monitor::MonitorManager;
 use crate::profile::ProfileStore;
 use crate::serial::SerialManager;
@@ -20,6 +21,7 @@ pub struct AppState {
     pub data_dir: PathBuf,
     pub vault: Arc<Vault>,
     pub profiles: Arc<ProfileStore>,
+    pub known_hosts: Arc<KnownHosts>,
     pub settings: Arc<SettingsStore>,
     pub ssh: SshManager,
     pub serial: SerialManager,
@@ -37,6 +39,7 @@ impl AppState {
         std::fs::create_dir_all(&data_dir).context("创建应用数据目录失败")?;
         let vault = Arc::new(Vault::open(&data_dir)?);
         let profiles = Arc::new(ProfileStore::open(&data_dir)?);
+        let known_hosts = Arc::new(KnownHosts::open(&data_dir)?);
         let settings = Arc::new(SettingsStore::open(&data_dir)?);
         let http = reqwest::Client::builder()
             .user_agent("FanSSH/1.0")
@@ -48,6 +51,7 @@ impl AppState {
             data_dir,
             vault,
             profiles,
+            known_hosts,
             settings,
             ssh: SshManager::default(),
             serial: SerialManager::default(),

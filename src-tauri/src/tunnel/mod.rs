@@ -5,11 +5,12 @@ use std::time::Duration;
 use tauri::ipc::Channel as TauriChannel;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, Notify, Mutex};
+use tokio::sync::{mpsc, Mutex, Notify};
 use uuid::Uuid;
 
 use crate::ipc::dto::{TunnelEvent, TunnelState};
 use crate::ipc::error::{AppError, AppResult};
+use crate::known_hosts::KnownHosts;
 use crate::session::model::{AuthRef, Profile, Protocol, TunnelKind, TunnelRoute};
 use crate::transport::ssh::connect_profile_with_forward;
 use crate::vault::Vault;
@@ -30,6 +31,7 @@ impl TunnelManager {
         profile: &Profile,
         server: Profile,
         vault: Arc<Vault>,
+        known_hosts: Arc<KnownHosts>,
         route: TunnelRoute,
         on_event: TauriChannel<TunnelEvent>,
     ) -> AppResult<()> {
@@ -65,6 +67,7 @@ impl TunnelManager {
                 route,
                 server,
                 vault,
+                known_hosts,
                 on_event,
                 stop,
                 auto_reconnect,
@@ -94,13 +97,14 @@ async fn run_route(
     route: TunnelRoute,
     server: Profile,
     vault: Arc<Vault>,
+    known_hosts: Arc<KnownHosts>,
     on_event: TauriChannel<TunnelEvent>,
     stop: Arc<Notify>,
     auto_reconnect: bool,
 ) {
     loop {
         emit(&on_event, route.id, TunnelState::Starting, None, None);
-        match run_once(&route, &server, &vault, &on_event, &stop).await {
+        match run_once(&route, &server, &vault, &known_hosts, &on_event, &stop).await {
             Ok(()) => {
                 emit(&on_event, route.id, TunnelState::Stopped, None, None);
                 break;
@@ -136,13 +140,14 @@ async fn run_once(
     route: &TunnelRoute,
     server: &Profile,
     vault: &Vault,
+    known_hosts: &Arc<KnownHosts>,
     on_event: &TauriChannel<TunnelEvent>,
     stop: &Arc<Notify>,
 ) -> Result<()> {
     if route.kind == TunnelKind::Remote {
-        run_remote(route, server, vault, on_event, stop).await
+        run_remote(route, server, vault, known_hosts, on_event, stop).await
     } else {
-        run_listener(route, server, vault, on_event, stop).await
+        run_listener(route, server, vault, known_hosts, on_event, stop).await
     }
 }
 
@@ -151,10 +156,11 @@ async fn run_listener(
     route: &TunnelRoute,
     server: &Profile,
     vault: &Vault,
+    known_hosts: &Arc<KnownHosts>,
     on_event: &TauriChannel<TunnelEvent>,
     stop: &Arc<Notify>,
 ) -> Result<()> {
-    let connected = connect_profile_with_forward(server, vault, None, None)
+    let connected = connect_profile_with_forward(server, vault, known_hosts.clone(), None, None)
         .await
         .map_err(|error| anyhow!("连接 SSH 服务器失败：{error:#}"))?;
     let handle = connected.handle.clone();
@@ -213,13 +219,15 @@ async fn run_remote(
     route: &TunnelRoute,
     server: &Profile,
     vault: &Vault,
+    known_hosts: &Arc<KnownHosts>,
     on_event: &TauriChannel<TunnelEvent>,
     stop: &Arc<Notify>,
 ) -> Result<()> {
     let (forward_tx, mut forward_rx) = mpsc::unbounded_channel();
-    let connected = connect_profile_with_forward(server, vault, None, Some(forward_tx))
-        .await
-        .map_err(|error| anyhow!("连接 SSH 服务器失败：{error:#}"))?;
+    let connected =
+        connect_profile_with_forward(server, vault, known_hosts.clone(), None, Some(forward_tx))
+            .await
+            .map_err(|error| anyhow!("连接 SSH 服务器失败：{error:#}"))?;
     let handle = connected.handle.clone();
 
     let bind_host = bind_host(&route.local_host);
@@ -227,7 +235,13 @@ async fn run_remote(
         .tcpip_forward(bind_host.clone(), route.local_port as u32)
         .await
         .with_context(|| format!("服务器拒绝监听 {bind_host}:{}", route.local_port))?;
-    emit(on_event, route.id, TunnelState::Running, Some(port as u16), None);
+    emit(
+        on_event,
+        route.id,
+        TunnelState::Running,
+        Some(port as u16),
+        None,
+    );
 
     loop {
         tokio::select! {
@@ -252,9 +266,7 @@ async fn run_remote(
         }
     }
 
-    let _ = handle
-        .cancel_tcpip_forward(bind_host, port)
-        .await;
+    let _ = handle.cancel_tcpip_forward(bind_host, port).await;
     let _ = connected
         .handle
         .disconnect(russh::Disconnect::ByApplication, "tunnel stopped", "en")

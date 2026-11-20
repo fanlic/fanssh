@@ -12,6 +12,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::ipc::dto::{RemoteEntry, SftpOpResult, SftpTextFile, TransferEvent};
+use crate::known_hosts::KnownHosts;
 use crate::session::model::Profile;
 use crate::transport::ssh::{connect_profile, ConnectedSsh};
 use crate::vault::Vault;
@@ -49,8 +50,13 @@ pub struct SftpManager {
 }
 
 impl SftpManager {
-    pub async fn open(&self, profile: &Profile, vault: &Vault) -> Result<(Uuid, String)> {
-        let conn = connect_profile(profile, vault, None).await?;
+    pub async fn open(
+        &self,
+        profile: &Profile,
+        vault: &Vault,
+        known_hosts: Arc<KnownHosts>,
+    ) -> Result<(Uuid, String)> {
+        let conn = connect_profile(profile, vault, known_hosts, None).await?;
         let channel = conn
             .handle
             .channel_open_session()
@@ -68,13 +74,10 @@ impl SftpManager {
             .await
             .unwrap_or_else(|_| "/".to_string());
         let id = Uuid::new_v4();
-        self.sessions.lock().await.insert(
-            id,
-            Arc::new(Mutex::new(SftpEntry {
-                sftp,
-                _conn: conn,
-            })),
-        );
+        self.sessions
+            .lock()
+            .await
+            .insert(id, Arc::new(Mutex::new(SftpEntry { sftp, _conn: conn })));
         Ok((id, home))
     }
 

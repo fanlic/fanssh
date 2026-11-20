@@ -9,6 +9,7 @@ use tokio::time::{interval, MissedTickBehavior};
 
 use crate::ipc::dto::{SessionState, TermEvent};
 use crate::ipc::error::{AppError, AppResult};
+use crate::known_hosts::KnownHosts;
 use crate::session::model::{Profile, SessionId, SshPrefs};
 use crate::transport::ssh::{connect_profile, AuthPrompts, AuthUi, ClientHandler, ConnectedSsh};
 use crate::vault::Vault;
@@ -45,6 +46,7 @@ impl SshManager {
         &self,
         profile: Profile,
         vault: Arc<Vault>,
+        known_hosts: Arc<KnownHosts>,
         on_event: TauriChannel<TermEvent>,
     ) -> AppResult<SessionId> {
         let session_id = SessionId::new();
@@ -61,7 +63,7 @@ impl SshManager {
             prompts: &self.auth_prompts,
             on_event: &on_event,
         };
-        let connected = connect_profile(&profile, &vault, Some(auth_ui)).await?;
+        let connected = connect_profile(&profile, &vault, known_hosts, Some(auth_ui)).await?;
         let mut channel = connected
             .handle
             .channel_open_session()
@@ -240,10 +242,7 @@ impl SshManager {
             .map_err(|_| AppError::new("ssh.exec_timeout", "远端命令执行超时"))
     }
 
-    pub(crate) async fn handle(
-        &self,
-        session: SessionId,
-    ) -> AppResult<Arc<Handle<ClientHandler>>> {
+    pub(crate) async fn handle(&self, session: SessionId) -> AppResult<Arc<Handle<ClientHandler>>> {
         self.handles
             .lock()
             .await

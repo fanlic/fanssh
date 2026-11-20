@@ -3,6 +3,7 @@ mod app;
 mod crypto;
 mod docker;
 mod ipc;
+mod known_hosts;
 mod monitor;
 mod profile;
 mod serial;
@@ -62,6 +63,8 @@ pub fn run() {
             vault_put,
             vault_list,
             vault_delete,
+            known_hosts_list,
+            known_hosts_delete,
             sftp_open,
             sftp_list,
             sftp_chmod,

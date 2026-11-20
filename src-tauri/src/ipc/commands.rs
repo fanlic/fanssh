@@ -9,9 +9,9 @@ use crate::app::settings::{AiSettingsFile, UiSettings};
 use crate::app::AppState;
 use crate::docker::{self, DockerContainer, DockerLogs};
 use crate::ipc::dto::{
-    AiChatRequest, AiSettingsInput, AiSettingsView, Nl2CmdResult, RdpEvent,
-    RdpInputDto, RemoteEntry, SerialPortInfo, SftpOpResult, SftpOpenResp, SftpTextFile,
-    TermEvent, TransferEvent, UpdateEvent, UpdateInfoDto, UpdaterStatusDto, VncEvent, VncInputDto,
+    AiChatRequest, AiSettingsInput, AiSettingsView, Nl2CmdResult, RdpEvent, RdpInputDto,
+    RemoteEntry, SerialPortInfo, SftpOpResult, SftpOpenResp, SftpTextFile, TermEvent,
+    TransferEvent, UpdateEvent, UpdateInfoDto, UpdaterStatusDto, VncEvent, VncInputDto,
 };
 use crate::ipc::error::{AppError, AppResult};
 use crate::monitor::MonitorEvent;
@@ -41,7 +41,8 @@ pub async fn term_open(
         ));
     }
     let vault = state.vault.clone();
-    state.ssh.open(profile, vault, on_event).await
+    let known_hosts = state.known_hosts.clone();
+    state.ssh.open(profile, vault, known_hosts, on_event).await
 }
 
 #[tauri::command]
@@ -348,6 +349,29 @@ pub async fn profile_import(
 }
 
 // ---------------------------------------------------------------------------
+// SSH 主机密钥
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn known_hosts_list(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<crate::known_hosts::KnownHostEntry>> {
+    Ok(state.known_hosts.list())
+}
+
+#[tauri::command]
+pub async fn known_hosts_delete(
+    state: State<'_, AppState>,
+    host: String,
+    port: u16,
+) -> AppResult<bool> {
+    state
+        .known_hosts
+        .delete(&host, port)
+        .map_err(|e| AppError::new("known_hosts.delete_failed", format!("{e:#}")))
+}
+
+// ---------------------------------------------------------------------------
 // 凭据库
 // ---------------------------------------------------------------------------
 
@@ -391,10 +415,7 @@ pub async fn vault_delete(state: State<'_, AppState>, id: Uuid) -> AppResult<()>
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn sftp_open(
-    state: State<'_, AppState>,
-    profile_id: Uuid,
-) -> AppResult<SftpOpenResp> {
+pub async fn sftp_open(state: State<'_, AppState>, profile_id: Uuid) -> AppResult<SftpOpenResp> {
     let profile = state
         .profiles
         .get(&profile_id)
@@ -403,8 +424,9 @@ pub async fn sftp_open(
         return Err(AppError::new("sftp.unsupported", "SFTP 需要 SSH 协议配置"));
     }
     let vault = state.vault.clone();
+    let known_hosts = state.known_hosts.clone();
     let sftp = state.sftp.clone();
-    let (sftp_id, home) = sftp.open(&profile, &vault).await?;
+    let (sftp_id, home) = sftp.open(&profile, &vault, known_hosts).await?;
     Ok(SftpOpenResp { sftp_id, home })
 }
 
@@ -426,7 +448,9 @@ pub async fn sftp_chmod(
     mode: u32,
 ) -> AppResult<()> {
     let sftp = state.sftp.clone();
-    sftp.chmod(sftp_id, &path, mode).await.map_err(AppError::from)
+    sftp.chmod(sftp_id, &path, mode)
+        .await
+        .map_err(AppError::from)
 }
 
 #[tauri::command]
@@ -513,9 +537,7 @@ pub async fn sftp_read_text(
     path: String,
 ) -> AppResult<SftpTextFile> {
     let sftp = state.sftp.clone();
-    sftp.read_text(sftp_id, &path)
-        .await
-        .map_err(AppError::from)
+    sftp.read_text(sftp_id, &path).await.map_err(AppError::from)
 }
 
 #[tauri::command]
@@ -637,10 +659,7 @@ pub async fn ui_settings_save(
 }
 
 #[tauri::command]
-pub async fn ai_chat(
-    state: State<'_, AppState>,
-    request: AiChatRequest,
-) -> AppResult<String> {
+pub async fn ai_chat(state: State<'_, AppState>, request: AiChatRequest) -> AppResult<String> {
     let settings = state.settings.ai();
     let api_key = read_api_key(&*state, &settings)?;
     let api_key = api_key.as_ref().map(|key| key.as_str());
@@ -684,11 +703,9 @@ pub async fn ai_nl2cmd(
 
     let result = ai::parse_nl2cmd(&raw);
     if result.command.trim().is_empty() {
-        return Err(AppError::new(
-            "ai.invalid_response",
-            "模型没有返回可执行的命令",
-        )
-        .with_detail(raw));
+        return Err(
+            AppError::new("ai.invalid_response", "模型没有返回可执行的命令").with_detail(raw),
+        );
     }
     Ok(result)
 }
@@ -805,9 +822,10 @@ pub async fn tunnel_start(
         .cloned()
         .ok_or_else(|| AppError::new("tunnel.route_missing", "找不到该转发路由"))?;
     let vault = state.vault.clone();
+    let known_hosts = state.known_hosts.clone();
     state
         .tunnel
-        .start(&profile, server, vault, route, on_event)
+        .start(&profile, server, vault, known_hosts, route, on_event)
         .await
 }
 

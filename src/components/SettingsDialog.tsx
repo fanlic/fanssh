@@ -1,7 +1,15 @@
 import { useEffect, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { errorText, openExternal, updaterCheck, updaterInstall, updaterStatus } from "../api";
+import {
+  errorText,
+  knownHostsDelete,
+  knownHostsList,
+  openExternal,
+  updaterCheck,
+  updaterInstall,
+  updaterStatus,
+} from "../api";
 import {
   APPEARANCE_PRESETS,
   BACKGROUND_COLORS,
@@ -9,7 +17,7 @@ import {
   findPreset,
 } from "../lib/appearance";
 import { useUiSettingsStore } from "../uiSettings";
-import type { ShortcutSettings, UpdateInfo, UpdaterStatus } from "../types";
+import type { KnownHostEntry, ShortcutSettings, UpdateInfo, UpdaterStatus } from "../types";
 
 interface Props {
   open: boolean;
@@ -20,7 +28,7 @@ interface Props {
 }
 
 type Phase = "idle" | "checking" | "uptodate" | "available" | "confirm" | "installing" | "installed";
-type Page = "appearance" | "terminal" | "shortcuts" | "update" | "about";
+type Page = "appearance" | "terminal" | "shortcuts" | "security" | "update" | "about";
 
 const FONT_CANDIDATES = ["Ubuntu", "Menlo", "Monaco", "Consolas", "Courier New", "MesloLGS NF"];
 
@@ -140,6 +148,8 @@ export function SettingsDialog({ open, platform, onClose, onNotice }: Props) {
     done: 0,
     total: null,
   });
+  const [knownHosts, setKnownHosts] = useState<KnownHostEntry[]>([]);
+  const [knownHostsLoading, setKnownHostsLoading] = useState(false);
 
   const appearance = useUiSettingsStore((s) => s.settings.appearance);
   const terminal = useUiSettingsStore((s) => s.settings.terminal);
@@ -163,9 +173,36 @@ export function SettingsDialog({ open, platform, onClose, onNotice }: Props) {
     updaterStatus()
       .then(setStatus)
       .catch((err) => setError(errorText(err)));
+    refreshKnownHosts();
   }, [open]);
 
   if (!open) return null;
+
+  const refreshKnownHosts = async () => {
+    setKnownHostsLoading(true);
+    try {
+      setKnownHosts(await knownHostsList());
+    } catch (err) {
+      onNotice(errorText(err), "error");
+    } finally {
+      setKnownHostsLoading(false);
+    }
+  };
+
+  const handleDeleteKnownHost = async (entry: KnownHostEntry) => {
+    try {
+      const removed = await knownHostsDelete(entry.host, entry.port);
+      if (removed) onNotice(`已删除 ${entry.host}:${entry.port} 的主机密钥记录`);
+      await refreshKnownHosts();
+    } catch (err) {
+      onNotice(errorText(err), "error");
+    }
+  };
+
+  const formatSeenTime = (seconds: number) => {
+    if (!seconds) return "-";
+    return new Date(seconds * 1000).toLocaleString();
+  };
 
   const handleCheck = async () => {
     setPhase("checking");
@@ -265,6 +302,7 @@ export function SettingsDialog({ open, platform, onClose, onNotice }: Props) {
                 ["appearance", "主题界面"],
                 ["terminal", "通用终端"],
                 ["shortcuts", "按键配置"],
+                ["security", "安全"],
                 ["update", "软件更新"],
                 ["about", "关于与平台"],
               ] as Array<[Page, string]>
@@ -653,6 +691,48 @@ export function SettingsDialog({ open, platform, onClose, onNotice }: Props) {
               </>
             )}
 
+            {tab === "security" && (
+              <>
+                <div className="set-head">
+                  <span className="set-head-note">SSH 首次连接会自动信任主机密钥，后续指纹变化会拒绝连接。</span>
+                  <button className="btn-ghost sm" onClick={refreshKnownHosts} disabled={knownHostsLoading}>
+                    刷新
+                  </button>
+                </div>
+
+                <div className="set-card">
+                  <p className="set-card-title">受信任的 SSH 主机</p>
+                  <p className="set-card-desc">
+                    服务器重装或更换 SSH 主机密钥后，删除对应记录再重新连接。
+                  </p>
+                  {knownHosts.length === 0 ? (
+                    <p className="muted">暂无记录。首次 SSH、SFTP 或隧道连接成功后会自动写入。</p>
+                  ) : (
+                    <div className="known-host-list">
+                      {knownHosts.map((entry) => (
+                        <div className="known-host-row" key={`${entry.host}:${entry.port}`}>
+                          <div className="known-host-main">
+                            <strong>{entry.host}:{entry.port}</strong>
+                            <code>{entry.algorithm} {entry.fingerprint}</code>
+                            <span className="muted">
+                              首次信任 {formatSeenTime(entry.first_seen)} · 最近验证 {formatSeenTime(entry.last_seen)}
+                            </span>
+                          </div>
+                          <button
+                            className="btn-ghost sm"
+                            onClick={() => handleDeleteKnownHost(entry)}
+                            disabled={knownHostsLoading}
+                          >
+                            删除
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
             {tab === "about" && (
               <div className="set-card">
                 <p className="set-card-title">版本信息</p>
@@ -762,7 +842,7 @@ export function SettingsDialog({ open, platform, onClose, onNotice }: Props) {
               </>
             )}
 
-            {saveError && tab !== "update" && <p className="update-error">{saveError}</p>}
+            {saveError && tab !== "update" && tab !== "security" && <p className="update-error">{saveError}</p>}
           </div>
         </div>
         <div className="dlg-foot">

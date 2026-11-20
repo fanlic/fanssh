@@ -16,7 +16,7 @@
 
 ## 尚未实现 / 已知限制
 
-- SSH 主机密钥目前只记录、未接入 known_hosts 校验。
+- SSH 主机密钥使用本地 `known_hosts.json` 做首次信任后校验；首次连接会自动记录，后续指纹变化会拒绝连接。
 - 终端日志高亮、全局搜索、快捷键自定义、会话录制、插件机制未实现。
 - AI 为非流式响应；NL2CMD 的本地风险规则是保守拦截，不能替代人工审查。
 - SFTP 未实现本地双栏文件浏览。
@@ -179,6 +179,7 @@ npx tauri signer generate -w ~/keys/fanssh.key
 ## 数据与安全
 
 - 配置：`profiles.json`，不含任何明文密码或私钥。
+- SSH 主机密钥：`known_hosts.json`，保存 host/port、算法与 SHA256 指纹；服务器重装或换密钥后可在设置的安全页面删除对应记录再重连。
 - 凭据：`vault.json`，主密钥在 Windows 下由 DPAPI（当前用户范围）包装，Linux 下由数据目录中的 `secret.key`（目录 0700 / 文件 0600）包装；每条凭据使用 AES-256-GCM，AAD 绑定 `id:kind`。
 - AI API Key 同样存放在凭据库，不写入 `settings.json`，也不会回传到前端。
 - 数据目录优先级：环境变量 `FANSSH_DATA_DIR` → exe 同级存在 `portable.marker` 时的 `data/` → 系统应用数据目录。

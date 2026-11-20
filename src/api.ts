@@ -6,6 +6,7 @@ import type {
   DockerContainer,
   DockerLogs,
   MonitorEvent,
+  KnownHostEntry,
   Nl2CmdResult,
   Profile,
   RemoteEntry,
@@ -410,6 +411,18 @@ export function tunnelStop(routeId: string): Promise<void> {
 
 export function tunnelActive(): Promise<string[]> {
   return invoke("tunnel_active");
+}
+
+// ---------------------------------------------------------------------------
+// SSH 主机密钥
+// ---------------------------------------------------------------------------
+
+export function knownHostsList(): Promise<KnownHostEntry[]> {
+  return invoke("known_hosts_list");
+}
+
+export function knownHostsDelete(host: string, port: number): Promise<boolean> {
+  return invoke("known_hosts_delete", { host, port });
 }
 
 // ---------------------------------------------------------------------------

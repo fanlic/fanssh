@@ -4729,3 +4729,31 @@ body.is-resizing {
   font-size: 10px;
   color: var(--text-faint);
 }
+
+.known-host-list {
+  display: grid;
+  gap: 10px;
+}
+
+.known-host-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-bg) 88%, transparent);
+}
+
+.known-host-main {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.known-host-main code {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
