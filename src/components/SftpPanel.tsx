@@ -99,7 +99,9 @@ function extOf(name: string): string {
 export function SftpPanel({ profileId, profileName, onClose }: Props) {
   const [sftpId, setSftpId] = useState<string | null>(null);
   const [cwd, setCwd] = useState("");
+  const [homeDir, setHomeDir] = useState("");
   const [entries, setEntries] = useState<RemoteEntry[]>([]);
+  const [showHidden, setShowHidden] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<RemoteEntry | null>(null);
@@ -220,6 +222,7 @@ export function SftpPanel({ profileId, profileName, onClose }: Props) {
         }
         sftpRef.current = resp.sftp_id;
         setSftpId(resp.sftp_id);
+        setHomeDir(resp.home);
         await loadDir(resp.sftp_id, resp.home);
       } catch (err) {
         if (!disposed) setError(errorText(err));
@@ -267,6 +270,10 @@ export function SftpPanel({ profileId, profileName, onClose }: Props) {
       prev.includes(path) ? prev.filter((item) => item !== path) : [...prev, path],
     );
   };
+
+  const visibleEntries = showHidden
+    ? entries
+    : entries.filter((entry) => !entry.name.startsWith("."));
 
   const checkedEntries = checked
     .map((path) => entries.find((entry) => entry.path === path))
@@ -538,7 +545,8 @@ export function SftpPanel({ profileId, profileName, onClose }: Props) {
     setEditorConflict(false);
   };
 
-  const allChecked = entries.length > 0 && checked.length === entries.length;
+  const visibleChecked = checked.filter((path) => visibleEntries.some((entry) => entry.path === path));
+  const allChecked = visibleEntries.length > 0 && visibleChecked.length === visibleEntries.length;
 
   return (
     <aside className="side-panel sftp-panel" aria-label="文件工作区">
@@ -580,6 +588,13 @@ export function SftpPanel({ profileId, profileName, onClose }: Props) {
           />
           <button
             className="btn-ghost sm icon-only"
+            title="Home"
+            onClick={() => sftpId && homeDir && loadDir(sftpId, homeDir)}
+          >
+            <Icon name="folder" size={12} />
+          </button>
+          <button
+            className="btn-ghost sm icon-only"
             title="刷新"
             onClick={() => sftpId && loadDir(sftpId, cwd)}
           >
@@ -609,6 +624,18 @@ export function SftpPanel({ profileId, profileName, onClose }: Props) {
           <button className="btn-ghost sm" onClick={handleMkdir} disabled={!sftpId}>
             <Icon name="plus" size={12} />
             新建目录
+          </button>
+          <button
+            className={`btn-ghost sm${showHidden ? " is-on" : ""}`}
+            onClick={() => {
+              setShowHidden((value) => !value);
+              setChecked([]);
+            }}
+            disabled={!sftpId}
+            title="显示或隐藏以 . 开头的文件"
+          >
+            <Icon name="filter" size={12} />
+            隐藏文件
           </button>
           <button
             className="btn-ghost sm"
@@ -645,7 +672,7 @@ export function SftpPanel({ profileId, profileName, onClose }: Props) {
                 type="checkbox"
                 checked={allChecked}
                 onChange={() =>
-                  setChecked(allChecked ? [] : entries.map((entry) => entry.path))
+                  setChecked(allChecked ? [] : visibleEntries.map((entry) => entry.path))
                 }
                 aria-label="全选"
               />
@@ -692,7 +719,7 @@ export function SftpPanel({ profileId, profileName, onClose }: Props) {
                   <span className="col-time mono">{formatTime(entry.mtime)}</span>
                 </div>
               ))}
-            {!loading && entries.length === 0 && <div className="sftp-hint">目录为空</div>}
+            {!loading && visibleEntries.length === 0 && <div className="sftp-hint">目录为空</div>}
           </div>
         </div>
 
