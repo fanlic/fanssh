@@ -837,6 +837,41 @@ fn is_portable() -> bool {
         .unwrap_or(false)
 }
 
+/// 是否运行在 AppImage 内。AppImage 运行时由运行时注入 APPIMAGE（镜像路径）与 APPDIR。
+/// deb 安装后直接执行 /usr/bin 下的可执行文件，这两个变量都不存在。
+fn running_in_appimage() -> bool {
+    std::env::var_os("APPIMAGE").is_some() || std::env::var_os("APPDIR").is_some()
+}
+
+/// 运行时形态。Linux 下只有 AppImage 能就地替换镜像；deb 安装需要用户重新安装。
+fn update_runtime() -> &'static str {
+    if is_portable() {
+        return "portable";
+    }
+    match std::env::consts::OS {
+        "windows" => "windows",
+        "linux" => {
+            if running_in_appimage() {
+                "appimage"
+            } else {
+                "deb"
+            }
+        }
+        "macos" => "macos",
+        _ => "other",
+    }
+}
+
+/// 支持应用内自更新的运行时：Windows 安装版（NSIS）与 Linux AppImage。
+fn supports_self_update(runtime: &str) -> bool {
+    matches!(runtime, "windows" | "appimage")
+}
+
+/// deb 安装版不替换镜像，但允许检查版本并引导用户去更新通道下载新 deb。
+fn supports_update_check(runtime: &str) -> bool {
+    supports_self_update(runtime) || runtime == "deb"
+}
+
 fn build_updater(app: &tauri::AppHandle) -> AppResult<tauri_plugin_updater::Updater> {
     use tauri_plugin_updater::UpdaterExt;
 
@@ -857,20 +892,30 @@ pub fn app_platform() -> String {
 #[tauri::command]
 pub async fn updater_status(app: tauri::AppHandle) -> AppResult<UpdaterStatusDto> {
     let endpoint = configured_endpoint(&app).unwrap_or_default();
+    let runtime = update_runtime();
     Ok(UpdaterStatusDto {
         current_version: app.package_info().version.to_string(),
         channel_url: channel_url(&endpoint),
         endpoint,
         portable: is_portable(),
+        runtime: runtime.to_string(),
+        self_update: supports_self_update(runtime),
     })
 }
 
 #[tauri::command]
 pub async fn updater_check(app: tauri::AppHandle) -> AppResult<Option<UpdateInfoDto>> {
-    if is_portable() {
+    let runtime = update_runtime();
+    if runtime == "portable" {
         return Err(AppError::new(
             "updater.portable",
             "便携版不支持自动更新，请到 Release 页面下载新的便携 zip",
+        ));
+    }
+    if !supports_update_check(runtime) {
+        return Err(AppError::new(
+            "updater.unsupported",
+            "当前平台不支持自动更新，请到 Release 页面下载新版本",
         ));
     }
     let updater = build_updater(&app)?;
@@ -878,12 +923,19 @@ pub async fn updater_check(app: tauri::AppHandle) -> AppResult<Option<UpdateInfo
         .check()
         .await
         .map_err(|e| AppError::new("updater.check_failed", format!("检查更新失败：{e}")))?;
+    let self_update = supports_self_update(runtime);
+    let fallback_url = channel_url(&configured_endpoint(&app).unwrap_or_default());
     Ok(update.map(|update| UpdateInfoDto {
         version: update.version.to_string(),
         current_version: update.current_version.to_string(),
         notes: update.body.clone(),
         date: update.date.as_ref().map(|date| date.to_string()),
-        url: None,
+        // 能自更新的运行时给出安装包直链；deb 安装版给更新通道页面，由用户挑选 deb 重新安装
+        url: Some(if self_update {
+            update.download_url.to_string()
+        } else {
+            fallback_url
+        }),
     }))
 }
 
@@ -892,13 +944,29 @@ pub async fn updater_install(
     app: tauri::AppHandle,
     on_event: TauriChannel<UpdateEvent>,
 ) -> AppResult<()> {
-    if is_portable() {
-        return Err(AppError::new(
-            "updater.portable",
-            "便携版不支持自动更新，请到 Release 页面下载新的便携 zip",
-        ));
+    match update_runtime() {
+        "portable" => {
+            return Err(AppError::new(
+                "updater.portable",
+                "便携版不支持自动更新，请到 Release 页面下载新的便携 zip",
+            ))
+        }
+        "deb" => {
+            return Err(AppError::new(
+                "updater.deb_install",
+                "deb 安装版不支持应用内自更新，请下载新版本后重新安装 deb",
+            ))
+        }
+        runtime if !supports_self_update(runtime) => {
+            return Err(AppError::new(
+                "updater.unsupported",
+                "当前平台不支持应用内自动更新，请到 Release 页面下载新版本",
+            ))
+        }
+        _ => {}
     }
     let updater = build_updater(&app)?;
+
     let update = updater
         .check()
         .await
@@ -924,4 +992,36 @@ pub async fn updater_install(
         .map_err(|e| AppError::new("updater.install_failed", format!("下载或安装失败：{e}")))?;
     let _ = on_event.send(UpdateEvent::Installed);
     Ok(())
+}
+
+/// 用系统默认浏览器打开外链，只放行 http/https。
+/// 直接启动系统 opener 进程，不经过 shell，避免把 URL 拼进命令行被解释。
+#[tauri::command]
+pub fn open_external(url: String) -> AppResult<()> {
+    let parsed = reqwest::Url::parse(&url)
+        .map_err(|_| AppError::new("external.invalid_url", "链接格式不正确"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(AppError::new(
+            "external.scheme",
+            "只允许打开 http/https 链接",
+        ));
+    }
+    let target = parsed.as_str().to_string();
+    #[cfg(target_os = "linux")]
+    let (program, args) = ("xdg-open", vec![target.clone()]);
+    #[cfg(target_os = "windows")]
+    let (program, args) = (
+        "rundll32.exe",
+        vec!["url.dll,FileProtocolHandler".to_string(), target.clone()],
+    );
+    #[cfg(target_os = "macos")]
+    let (program, args) = ("open", vec![target.clone()]);
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+    let (program, args) = ("xdg-open", vec![target.clone()]);
+
+    std::process::Command::new(program)
+        .args(args)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| AppError::new("external.spawn_failed", format!("打开链接失败：{e}")))
 }

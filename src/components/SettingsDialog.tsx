@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { errorText, updaterCheck, updaterInstall, updaterStatus } from "../api";
+import { errorText, openExternal, updaterCheck, updaterInstall, updaterStatus } from "../api";
 import {
   APPEARANCE_PRESETS,
   BACKGROUND_COLORS,
@@ -13,7 +13,7 @@ import type { ShortcutSettings, UpdateInfo, UpdaterStatus } from "../types";
 
 interface Props {
   open: boolean;
-  /** 当前构建平台（windows / linux / macos），Linux 下关闭应用内自动更新。 */
+  /** 当前构建平台（windows / linux / macos）；具体能否自更新以后端返回的运行时形态为准。 */
   platform: string;
   onClose: () => void;
   onNotice: (message: string, kind?: "info" | "error") => void;
@@ -208,8 +208,29 @@ export function SettingsDialog({ open, platform, onClose, onNotice }: Props) {
   const sizeText = (bytes: number) =>
     bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`;
 
-  // Linux 版暂不接入应用内自动更新，避免留下一个永远失败的按钮。
-  const updaterSupported = platform === "windows";
+  // 能否在应用内直接安装更新：Windows 安装版与 AppImage。
+  // deb 安装版只能检测版本并引导去更新通道下载新的 deb。
+  const selfUpdate = status?.selfUpdate ?? platform === "windows";
+  const debInstall = status?.runtime === "deb";
+  const canCheck = selfUpdate || debInstall;
+
+  const handleOpenDownload = () => {
+    if (!status?.channelUrl) return;
+    openExternal(status.channelUrl).catch((err) => onNotice(errorText(err), "error"));
+  };
+
+  const runtimeLabel =
+    status?.runtime === "appimage"
+      ? "AppImage（可在应用内更新）"
+      : status?.runtime === "deb"
+        ? "deb 安装（需下载新版本重新安装）"
+        : status?.runtime === "portable"
+          ? "Windows 便携版"
+          : status?.runtime === "windows"
+            ? "Windows 安装版"
+            : status?.runtime === "macos"
+              ? "macOS"
+              : platform;
 
   const numberValue = (value: string, fallback: number) => {
     const parsed = Number(value);
@@ -648,6 +669,10 @@ export function SettingsDialog({ open, platform, onClose, onNotice }: Props) {
                   <span>运行平台</span>
                   <strong>{platform}</strong>
                 </div>
+                <div className="update-row">
+                  <span>安装形态</span>
+                  <strong>{runtimeLabel}</strong>
+                </div>
               </div>
             )}
 
@@ -665,9 +690,11 @@ export function SettingsDialog({ open, platform, onClose, onNotice }: Props) {
                 <div className="set-card">
                   <p className="set-card-title">检查更新</p>
                   <p className="set-card-desc">
-                    {updaterSupported
+                    {selfUpdate
                       ? "安装版可直接在应用内下载并安装更新，便携版请手动替换。"
-                      : `当前平台（${platform}）暂不支持应用内自动更新，请到发布页下载新的 AppImage 或 deb 手动替换。`}
+                      : debInstall
+                        ? "deb 安装版不支持应用内自更新。检测到新版本时请下载新的 deb 并重新安装。"
+                        : `当前平台（${platform}）暂不支持应用内自动更新，请到发布页下载新版本手动替换。`}
                   </p>
 
                   {phase === "checking" && <p className="muted">正在检查更新…</p>}
@@ -693,6 +720,13 @@ export function SettingsDialog({ open, platform, onClose, onNotice }: Props) {
                         {update.notes?.trim() || "该版本未提供更新说明。"}
                       </pre>
                     </div>
+                  )}
+
+                  {debInstall && phase === "available" && (
+                    <p className="update-hint">
+                      当前是 deb 安装，无法在应用内替换镜像。点击「前往下载」打开更新通道，下载新的
+                      deb 后重新安装即可。
+                    </p>
                   )}
 
                   {phase === "confirm" && (
@@ -747,9 +781,15 @@ export function SettingsDialog({ open, platform, onClose, onNotice }: Props) {
                 <button className="btn-ghost" onClick={onClose}>
                   稍后
                 </button>
-                <button className="btn-primary" onClick={() => setPhase("confirm")}>
-                  下载并安装
-                </button>
+                {debInstall ? (
+                  <button className="btn-primary" onClick={handleOpenDownload}>
+                    前往下载
+                  </button>
+                ) : (
+                  <button className="btn-primary" onClick={() => setPhase("confirm")}>
+                    下载并安装
+                  </button>
+                )}
               </>
             ) : phase === "installed" ? (
               <button
@@ -769,14 +809,14 @@ export function SettingsDialog({ open, platform, onClose, onNotice }: Props) {
                   className="btn-primary"
                   onClick={handleCheck}
                   disabled={
-                    !updaterSupported ||
+                    !canCheck ||
                     phase === "checking" ||
                     phase === "installing" ||
                     status?.portable === true
                   }
                   title={
-                    !updaterSupported
-                      ? "当前平台暂不支持应用内自动更新"
+                    !canCheck
+                      ? "当前安装方式不支持自动更新"
                       : status?.portable
                         ? "便携版请下载新版 zip"
                         : undefined

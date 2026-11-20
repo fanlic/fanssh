@@ -350,6 +350,10 @@ export interface UpdaterStatus {
   endpoint: string;
   channelUrl: string;
   portable: boolean;
+  /** 运行时形态：windows / portable / appimage / deb / macos / other */
+  runtime: string;
+  /** 当前安装方式是否支持应用内自更新 */
+  selfUpdate: boolean;
 }
 
 export interface UpdateInfo {

@@ -85,6 +85,7 @@ pub fn run() {
             app_platform,
             updater_check,
             updater_install,
+            open_external,
         ])
         .run(tauri::generate_context!())
         .expect("FanSSH 启动失败");

@@ -285,10 +285,14 @@ pub struct UpdaterStatusDto {
     pub current_version: String,
     /// 实际使用的更新源地址（来自 tauri.conf.json）
     pub endpoint: String,
-    /// 更新通道的 Releases 页面，便携版据此提示下载新包
+    /// 更新通道的 Releases 页面，便携版与 deb 安装版据此提示下载新包
     pub channel_url: String,
     /// 便携版不执行自更新，只提示去下载新 zip
     pub portable: bool,
+    /// 运行时形态：windows（安装版）、portable（便携版）、appimage、deb、macos、other
+    pub runtime: String,
+    /// 当前安装方式是否支持应用内下载并替换镜像（Windows 安装版与 AppImage）
+    pub self_update: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]

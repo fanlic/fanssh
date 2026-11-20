@@ -419,6 +419,11 @@ export async function updaterInstall(
   return invoke("updater_install", { onEvent: channel });
 }
 
+/** 用系统默认浏览器打开外链（后端只放行 http/https） */
+export function openExternal(url: string): Promise<void> {
+  return invoke("open_external", { url });
+}
+
 /** 把后端错误对象转成可读文本 */
 export function errorText(error: unknown): string {
   if (typeof error === "string") return error;
