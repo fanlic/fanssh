@@ -5020,3 +5020,28 @@ select:disabled {
   background: var(--hover);
   color: var(--text);
 }
+
+/* Fix focus and asset tree selection layering */
+.session.is-open {
+  background: transparent;
+  box-shadow: inset 2px 0 0 var(--accent-active);
+}
+.session.is-open:hover {
+  background: #1f1f1f;
+}
+.session.is-open .s-actions {
+  background: #1f1f1f;
+}
+.session.is-open .s-actions::before {
+  background: linear-gradient(90deg, transparent, #1f1f1f);
+}
+.session.is-open .s-name,
+.session.is-open .s-icon {
+  color: var(--accent-active);
+}
+.terminal-host {
+  cursor: text;
+}
+.terminal-host .xterm {
+  height: 100%;
+}

@@ -828,10 +828,17 @@ export function TerminalPane({ tabId, pane, active }: Props) {
         : prev,
     );
 
+  const activatePane = () => {
+    const tab = useAppStore.getState().tabs.find((item) => item.id === tabId);
+    const index = tab?.panes.findIndex((item) => item.key === pane.key) ?? 0;
+    setActivePane(tabId, index >= 0 ? index : 0);
+    window.setTimeout(() => termRef.current?.focus(), 0);
+  };
+
   return (
     <div
       className={`terminal-pane${active ? " is-active" : ""}`}
-      onMouseDown={() => setActivePane(tabId, useAppStore.getState().tabs.find((t) => t.id === tabId)?.panes.findIndex((p) => p.key === pane.key) ?? 0)}
+      onMouseDown={activatePane}
     >
       <div className="pane-head">
         <span className={`proto-tag ${profile?.protocol ?? "ssh"}`}>
@@ -894,7 +901,12 @@ export function TerminalPane({ tabId, pane, active }: Props) {
           </button>
         </span>
       </div>
-      <div className="terminal-host" ref={hostRef} onContextMenu={openMenu} />
+      <div
+        className="terminal-host"
+        ref={hostRef}
+        onMouseDown={activatePane}
+        onContextMenu={openMenu}
+      />
       {searchOpen && (
         <div className="term-search" role="search">
           <input
