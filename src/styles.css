@@ -4446,18 +4446,6 @@ body.is-resizing {
   color: #333;
   text-shadow: none;
 }
-.theme-pro {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  padding: 0 4px;
-  border-radius: 3px;
-  background: rgba(0, 0, 0, 0.45);
-  color: #ffd479;
-  font-size: 9px;
-  line-height: 14px;
-  letter-spacing: 0.04em;
-}
 .color-row {
   display: flex;
   align-items: center;
@@ -4845,5 +4833,112 @@ select:disabled {
 }
 
 .test-conn-result.is-error {
+  color: var(--danger);
+}
+
+/* SSH connection dialog layout parity improvements */
+.dlg-form > .dlg-card,
+.dlg-form > div.dlg-card {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-3);
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.dlg-form > .dlg-card + .dlg-card,
+.dlg-form > div.dlg-card + div.dlg-card {
+  margin-top: 12px;
+}
+
+.dlg-subcard {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  background: color-mix(in srgb, var(--input-bg) 62%, transparent);
+}
+
+.dlg-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.dlg-card-desc {
+  margin: 4px 0 0;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.saved-secret-pill {
+  flex: none;
+  padding: 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--success) 45%, transparent);
+  border-radius: 999px;
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.auth-methods {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.auth-method {
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  color: var(--text-dim);
+  background: var(--input-bg);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.auth-method:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.auth-method.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-weak);
+}
+
+.test-conn-row {
+  min-height: 40px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  background: var(--panel);
+}
+
+.test-conn-row.is-ok {
+  border-color: color-mix(in srgb, var(--success) 45%, transparent);
+  background: color-mix(in srgb, var(--success) 10%, var(--panel));
+}
+
+.test-conn-row.is-error {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  background: color-mix(in srgb, var(--danger) 10%, var(--panel));
+}
+
+.test-conn-row .test-conn-result {
+  color: var(--text-faint);
+}
+
+.test-conn-row.is-ok .test-conn-result {
+  color: var(--success);
+}
+
+.test-conn-row.is-error .test-conn-result {
   color: var(--danger);
 }

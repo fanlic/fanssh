@@ -1,10 +1,9 @@
 import type { AppearanceSettings } from "../types";
 
-/** 20 个预设主题；Pro 只是角标视觉，全部默认可用。 */
+/** 20 个开源版可用预设主题。 */
 export interface AppearancePreset {
   id: string;
   name: string;
-  pro: boolean;
   dark: boolean;
   theme: string;
   background: string;
@@ -12,26 +11,26 @@ export interface AppearancePreset {
 }
 
 export const APPEARANCE_PRESETS: AppearancePreset[] = [
-  { id: "light", name: "明亮", pro: false, dark: false, theme: "#2f8f5b", background: "#f2f3f5", nav: "#e4e6e9" },
-  { id: "dark", name: "暗夜", pro: false, dark: true, theme: "#3dbe71", background: "#141414", nav: "#313131" },
-  { id: "vermilion", name: "朱红", pro: true, dark: true, theme: "#e0533f", background: "#1c1210", nav: "#2a1a17" },
-  { id: "emerald", name: "翠绿", pro: true, dark: true, theme: "#2ecc71", background: "#101a14", nav: "#1a2a20" },
-  { id: "silver", name: "银灰", pro: true, dark: true, theme: "#b9c2cc", background: "#191b1e", nav: "#2a2d31" },
-  { id: "sky", name: "天蓝", pro: true, dark: true, theme: "#4aa8ff", background: "#0f1720", nav: "#182430" },
-  { id: "gold", name: "金黄", pro: true, dark: true, theme: "#e0b341", background: "#1a1710", nav: "#2a2518" },
-  { id: "amber", name: "橙黄", pro: true, dark: true, theme: "#f08a24", background: "#1b140d", nav: "#2b2014" },
-  { id: "crimson", name: "艳红", pro: true, dark: true, theme: "#ff4d6a", background: "#1c1013", nav: "#2c171c" },
-  { id: "pink", name: "粉红", pro: true, dark: true, theme: "#f472b6", background: "#1c1118", nav: "#2c1a26" },
-  { id: "violet", name: "雅紫", pro: true, dark: true, theme: "#a78bfa", background: "#15111f", nav: "#231a33" },
-  { id: "lake", name: "湖青", pro: true, dark: true, theme: "#22c3a6", background: "#0d1a19", nav: "#15292a" },
-  { id: "navy", name: "深蓝", pro: true, dark: true, theme: "#5b8cff", background: "#0e1320", nav: "#171f33" },
-  { id: "brown", name: "褐棕", pro: true, dark: true, theme: "#c08a5a", background: "#1a1510", nav: "#2a221a" },
-  { id: "ink", name: "墨黑", pro: true, dark: true, theme: "#8a8f98", background: "#0b0b0c", nav: "#1a1a1c" },
-  { id: "jade", name: "碧绿", pro: true, dark: true, theme: "#18b26b", background: "#0c1a13", nav: "#14291e" },
-  { id: "scarlet", name: "赤红", pro: true, dark: true, theme: "#e63946", background: "#1b0e10", nav: "#2b1519" },
-  { id: "indigo", name: "靛蓝", pro: true, dark: true, theme: "#4f46e5", background: "#111225", nav: "#1a1c3a" },
-  { id: "tea", name: "茶褐", pro: true, dark: true, theme: "#b08968", background: "#17140f", nav: "#262019" },
-  { id: "snow", name: "雪白", pro: true, dark: false, theme: "#2f8f5b", background: "#fafafa", nav: "#ececec" },
+  { id: "light", name: "明亮", dark: false, theme: "#2f8f5b", background: "#f2f3f5", nav: "#e4e6e9" },
+  { id: "dark", name: "暗夜", dark: true, theme: "#3dbe71", background: "#141414", nav: "#313131" },
+  { id: "vermilion", name: "朱红", dark: true, theme: "#e0533f", background: "#1c1210", nav: "#2a1a17" },
+  { id: "emerald", name: "翠绿", dark: true, theme: "#2ecc71", background: "#101a14", nav: "#1a2a20" },
+  { id: "silver", name: "银灰", dark: true, theme: "#b9c2cc", background: "#191b1e", nav: "#2a2d31" },
+  { id: "sky", name: "天蓝", dark: true, theme: "#4aa8ff", background: "#0f1720", nav: "#182430" },
+  { id: "gold", name: "金黄", dark: true, theme: "#e0b341", background: "#1a1710", nav: "#2a2518" },
+  { id: "amber", name: "橙黄", dark: true, theme: "#f08a24", background: "#1b140d", nav: "#2b2014" },
+  { id: "crimson", name: "艳红", dark: true, theme: "#ff4d6a", background: "#1c1013", nav: "#2c171c" },
+  { id: "pink", name: "粉红", dark: true, theme: "#f472b6", background: "#1c1118", nav: "#2c1a26" },
+  { id: "violet", name: "雅紫", dark: true, theme: "#a78bfa", background: "#15111f", nav: "#231a33" },
+  { id: "lake", name: "湖青", dark: true, theme: "#22c3a6", background: "#0d1a19", nav: "#15292a" },
+  { id: "navy", name: "深蓝", dark: true, theme: "#5b8cff", background: "#0e1320", nav: "#171f33" },
+  { id: "brown", name: "褐棕", dark: true, theme: "#c08a5a", background: "#1a1510", nav: "#2a221a" },
+  { id: "ink", name: "墨黑", dark: true, theme: "#8a8f98", background: "#0b0b0c", nav: "#1a1a1c" },
+  { id: "jade", name: "碧绿", dark: true, theme: "#18b26b", background: "#0c1a13", nav: "#14291e" },
+  { id: "scarlet", name: "赤红", dark: true, theme: "#e63946", background: "#1b0e10", nav: "#2b1519" },
+  { id: "indigo", name: "靛蓝", dark: true, theme: "#4f46e5", background: "#111225", nav: "#1a1c3a" },
+  { id: "tea", name: "茶褐", dark: true, theme: "#b08968", background: "#17140f", nav: "#262019" },
+  { id: "snow", name: "雪白", dark: false, theme: "#2f8f5b", background: "#fafafa", nav: "#ececec" },
 ];
 
 export const THEME_COLORS = [

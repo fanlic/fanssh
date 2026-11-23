@@ -896,8 +896,8 @@ export function SessionDialog({
             ))}
           </nav>
           <div className="dlg-form">
-            <div id="sec-basic">
-          <div className="form-grid">
+            <div id="sec-basic" className="dlg-card">
+              <div className="form-grid">
             <label>
               名称 *
               <input value={form.name} onChange={(e) => update("name", e.target.value)} placeholder="生产 Web-01" />
@@ -1036,7 +1036,7 @@ export function SessionDialog({
           )}
 
           {form.protocol === "vnc" && (
-            <div id="sec-vnc-display">
+            <div id="sec-vnc-display" className="dlg-card">
               <div className="section-title">显示</div>
               <div className="form-grid">
                 <label className="inline span-2">
@@ -1102,7 +1102,7 @@ export function SessionDialog({
           )}
 
           {form.protocol === "vnc" && (
-            <div id="sec-vnc-advanced">
+            <div id="sec-vnc-advanced" className="dlg-card">
               <div className="section-title">高级</div>
               <p className="muted">
                 当前使用兼容性优先的 Raw / CopyRect 编码，清晰度与压缩强度会随配置保存，
@@ -1181,21 +1181,33 @@ export function SessionDialog({
                 </label>
               </div>
 
-              <div className="section-title">认证</div>
-              <div className="form-grid">
-                <label>
-                  验证方式
-                  <select
-                    value={form.authMode}
-                    onChange={(e) => update("authMode", e.target.value as AuthMode)}
-                  >
-                    <option value="password">密码</option>
-                    <option value="key">秘钥</option>
-                    <option value="keyboard_interactive">交互认证（OTP / 安全问题）</option>
-                  </select>
-                </label>
-                {form.authMode === "password" && (
-                  <label>
+              <div className="dlg-subcard auth-card">
+                <div className="dlg-card-head">
+                  <div>
+                    <div className="section-title">认证</div>
+                    <p className="dlg-card-desc">凭据加密保存在本地，测试连接不会保存新输入的密码或私钥。</p>
+                  </div>
+                  {initial?.auth.kind !== "none" && <span className="saved-secret-pill">已保存凭据</span>}
+                </div>
+                <div className="auth-methods" role="group" aria-label="SSH 验证方式">
+                  {([
+                    ["password", "密码"],
+                    ["key", "私钥"],
+                    ["keyboard_interactive", "交互认证"],
+                  ] as Array<[AuthMode, string]>).map(([mode, label]) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={`auth-method${form.authMode === mode ? " is-active" : ""}`}
+                      onClick={() => update("authMode", mode)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <div className="form-grid">
+                  {form.authMode === "password" && (
+                  <label className="span-2">
                     密码 {existingPasswordSecret(initial) && <span className="muted">（留空沿用已保存密码）</span>}
                     <input
                       type="password"
@@ -1248,26 +1260,27 @@ export function SessionDialog({
                     连接时服务端会逐轮返回提示，弹窗输入 OTP / 安全问题等内容；输入不会保存到本地。
                   </p>
                 )}
-              </div>
-              <div className="test-conn-row">
-                <button
-                  type="button"
-                  className="btn-ghost"
-                  onClick={() => void handleTestConnection()}
-                  disabled={testing || saving}
-                >
-                  {testing ? "正在测试…" : "测试连接"}
-                </button>
-                {testResult && (
-                  <span className={`test-conn-result is-${testResult.kind}`}>{testResult.message}</span>
-                )}
+                </div>
+                <div className={`test-conn-row${testResult ? ` is-${testResult.kind}` : ""}`}>
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    onClick={() => void handleTestConnection()}
+                    disabled={testing || saving}
+                  >
+                    {testing ? "正在测试…" : "测试连接"}
+                  </button>
+                  <span className="test-conn-result">
+                    {testResult ? testResult.message : "保存前可先验证主机、端口和凭据是否可用。"}
+                  </span>
+                </div>
               </div>
             </>
           )}
             </div>
 
           {form.protocol === "serial" && (
-            <div id="sec-serial">
+            <div id="sec-serial" className="dlg-card">
               <div className="section-title">串口参数</div>
               <div className="form-grid">
                 <label className="span-2">
@@ -1461,7 +1474,7 @@ export function SessionDialog({
           )}
 
           {form.protocol === "ssh" && (
-            <div id="sec-conn">
+            <div id="sec-conn" className="dlg-card">
               <div className="section-title">连接设置</div>
               <div className="form-grid">
                 <label>
@@ -1491,7 +1504,7 @@ export function SessionDialog({
           )}
 
           {form.protocol === "ssh" && (
-            <div id="sec-jump">
+            <div id="sec-jump" className="dlg-card">
               <div className="section-title">跳板机链路（按顺序连接，第一项最先连接）</div>
               <div className="jump-list">
                 {form.jumps.map((hop, index) => (
@@ -1591,7 +1604,7 @@ export function SessionDialog({
           )}
 
           {form.protocol === "ssh" && (
-            <div id="sec-proxy">
+            <div id="sec-proxy" className="dlg-card">
               <div className="section-title">代理设置</div>
               <div className="form-grid">
                 <label className="inline span-2">
@@ -1622,7 +1635,7 @@ export function SessionDialog({
           )}
 
           {form.protocol === "ssh" && (
-            <div id="sec-other">
+            <div id="sec-other" className="dlg-card">
               <div className="section-title">其他设置</div>
               <div className="form-grid">
                 <label className="inline span-2">
@@ -1693,7 +1706,7 @@ export function SessionDialog({
           )}
 
           {form.protocol === "ssh" && (
-            <div id="sec-init">
+            <div id="sec-init" className="dlg-card">
               <div className="section-title">初始化</div>
               <div className="form-grid">
                 <label className="span-2">
@@ -1789,7 +1802,7 @@ export function SessionDialog({
           )}
 
           {form.protocol === "tunnel" && (
-            <div id="sec-tunnel">
+            <div id="sec-tunnel" className="dlg-card">
               <div className="section-title">转发路由（可添加多条，连接后分别启停）</div>
               <div className="jump-list">
                 {form.tunnel.routes.map((route, index) => {

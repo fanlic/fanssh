@@ -51,7 +51,7 @@ impl Default for AiSettingsFile {
     }
 }
 
-/// 外观：主题预设与自定义色。Pro 角标只是视觉标记，所有预设都可用。
+/// 外观：主题预设与自定义色。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppearanceSettings {

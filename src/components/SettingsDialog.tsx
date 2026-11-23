@@ -329,7 +329,7 @@ export function SettingsDialog({ open, platform, onClose, onNotice }: Props) {
                 <div className="set-card">
                   <p className="set-card-title">背景</p>
                   <p className="set-card-desc">
-                    预设包含主题色、背景色与导航栏颜色；所有预设均可使用，Pro 仅为视觉角标。
+                    预设包含主题色、背景色与导航栏颜色，开源版所有预设均可直接使用。
                   </p>
                   <div className="theme-grid">
                     {APPEARANCE_PRESETS.map((preset) => (
@@ -351,7 +351,6 @@ export function SettingsDialog({ open, platform, onClose, onNotice }: Props) {
                       >
                         <span className="theme-swatch" style={{ background: preset.theme }} />
                         <span className="theme-name">{preset.name}</span>
-                        {preset.pro && <span className="theme-pro">Pro</span>}
                       </button>
                     ))}
                   </div>
