@@ -3816,10 +3816,10 @@ label.inline input[type="checkbox"] {
   flex: none;
 }
 
-/* 活动栏移到工作区左侧 */
+/* 活动栏贴到工作区右侧 */
 .activitybar {
-  border-left: none;
-  border-right: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+  border-right: none;
 }
 
 /* 收起参考中没有的底部加密说明行 */
@@ -4531,7 +4531,8 @@ body.is-resizing {
    服务器监控面板（工作区右侧，卡片化）
 --------------------------------------------------------------------------- */
 .monitor-panel {
-  border-right: 1px solid var(--border);
+  border-right: 0;
+  border-left: 1px solid var(--border);
 }
 .monitor-body {
   flex: 1;
@@ -4973,4 +4974,49 @@ select:disabled {
   white-space: normal;
   text-align: left;
   line-height: 18px;
+}
+
+/* XTerminal-style connection center polish */
+.sb-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 8px 8px;
+  padding: 0 8px;
+  height: 30px;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  background: var(--input-bg);
+  color: var(--text-dim);
+}
+.sb-search:focus-within {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.sb-search input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+}
+.sb-search input:focus {
+  outline: none;
+}
+.sb-search button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-1);
+  color: var(--text-dim);
+}
+.sb-search button:hover {
+  background: var(--hover);
+  color: var(--text);
 }

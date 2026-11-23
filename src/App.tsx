@@ -557,17 +557,6 @@ export default function App() {
           />
         )}
 
-        <ActivityBar
-          sftpOpen={sftpProfileId !== null}
-          dockerOpen={dockerOpen}
-          monitorOpen={monitorOpen}
-          aiOpen={aiOpen}
-          onToggleSftp={handleSftpToggle}
-          onToggleDocker={handleDockerToggle}
-          onToggleMonitor={handleMonitorToggle}
-          onToggleAi={toggleAi}
-        />
-
         <main className="workspace">
           <TabBar
             onSplit={handleSplit}
@@ -606,17 +595,6 @@ export default function App() {
                 paneReady={activePane?.status === "ready"}
                 onClose={() => setDockerOpen(false)}
                 onOpenShell={handleDockerShell}
-              />
-            )}
-
-            {monitorOpen && (
-              <MonitorPanel
-                profile={activeProfile}
-                sessionId={
-                  activeProfile?.protocol === "ssh" ? (activePane?.sessionId ?? null) : null
-                }
-                paneReady={activePane?.status === "ready"}
-                onClose={() => setMonitorOpen(false)}
               />
             )}
 
@@ -708,8 +686,29 @@ export default function App() {
               )}
             </div>
 
+            {monitorOpen && (
+              <MonitorPanel
+                profile={activeProfile}
+                sessionId={
+                  activeProfile?.protocol === "ssh" ? (activePane?.sessionId ?? null) : null
+                }
+                paneReady={activePane?.status === "ready"}
+                onClose={() => setMonitorOpen(false)}
+              />
+            )}
           </div>
         </main>
+
+        <ActivityBar
+          sftpOpen={sftpProfileId !== null}
+          dockerOpen={dockerOpen}
+          monitorOpen={monitorOpen}
+          aiOpen={aiOpen}
+          onToggleSftp={handleSftpToggle}
+          onToggleDocker={handleDockerToggle}
+          onToggleMonitor={handleMonitorToggle}
+          onToggleAi={toggleAi}
+        />
 
         <AiSidebar collapsed={!aiOpen} />
       </div>
