@@ -1574,7 +1574,7 @@ dependencies = [
 
 [[package]]
 name = "fanssh"
-version = "1.0.8-preview.3"
+version = "1.0.8-preview.4"
 dependencies = [
  "aes-gcm 0.10.3",
  "anyhow",
