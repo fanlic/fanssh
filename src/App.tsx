@@ -609,6 +609,17 @@ export default function App() {
               />
             )}
 
+            {monitorOpen && (
+              <MonitorPanel
+                profile={activeProfile}
+                sessionId={
+                  activeProfile?.protocol === "ssh" ? (activePane?.sessionId ?? null) : null
+                }
+                paneReady={activePane?.status === "ready"}
+                onClose={() => setMonitorOpen(false)}
+              />
+            )}
+
             <div
               className="stage"
               ref={stageRef}
@@ -697,16 +708,6 @@ export default function App() {
               )}
             </div>
 
-            {monitorOpen && (
-              <MonitorPanel
-                profile={activeProfile}
-                sessionId={
-                  activeProfile?.protocol === "ssh" ? (activePane?.sessionId ?? null) : null
-                }
-                paneReady={activePane?.status === "ready"}
-                onClose={() => setMonitorOpen(false)}
-              />
-            )}
           </div>
         </main>
 

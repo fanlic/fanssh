@@ -30,7 +30,7 @@ export function ActivityBar({
         aria-pressed={sftpOpen}
         onClick={onToggleSftp}
       >
-        <Icon name="folder" size={17} />
+        <Icon name="transfer" size={17} />
       </button>
       <button
         className={`ab-btn${dockerOpen ? " is-active" : ""}`}
@@ -54,7 +54,7 @@ export function ActivityBar({
         aria-pressed={aiOpen}
         onClick={onToggleAi}
       >
-        <Icon name={aiOpen ? "panel" : "spark"} size={17} />
+        <Icon name="spark" size={17} />
       </button>
     </nav>
   );

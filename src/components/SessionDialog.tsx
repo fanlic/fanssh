@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import {
   errorText,
@@ -167,6 +167,15 @@ const DEFAULT_VNC: VncPrefs = {
   crop_viewport: false,
   quality: 6,
   compression: 2,
+};
+
+const DEFAULT_PORT_BY_PROTOCOL: Record<Protocol, string> = {
+  ssh: "22",
+  rdp: "3389",
+  serial: "",
+  telnet: "23",
+  tunnel: "",
+  vnc: "5900",
 };
 
 const EMPTY: FormState = {
@@ -353,6 +362,7 @@ export function SessionDialog({
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
+  const protocolPorts = useRef<Record<Protocol, string>>({ ...DEFAULT_PORT_BY_PROTOCOL });
   const [ports, setPorts] = useState<SerialPortInfo[]>([]);
   const [portsLoading, setPortsLoading] = useState(false);
   const [portsError, setPortsError] = useState<string | null>(null);
@@ -361,8 +371,12 @@ export function SessionDialog({
   const sshServers = profiles.filter((profile) => profile.protocol === "ssh");
 
   useEffect(() => {
-    if (open) setForm(toForm(initial, defaultProtocol));
-    if (open) setNavId("sec-basic");
+    if (open) {
+      const nextForm = toForm(initial, defaultProtocol);
+      protocolPorts.current = { ...DEFAULT_PORT_BY_PROTOCOL, [nextForm.protocol]: nextForm.port };
+      setForm(nextForm);
+      setNavId("sec-basic");
+    }
   }, [open, initial, defaultProtocol]);
 
   const refreshPorts = async () => {
@@ -388,16 +402,22 @@ export function SessionDialog({
 
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     setTestResult(null);
-    setForm((prev) => ({ ...prev, [key]: value }));
+    setForm((prev) => {
+      if (key === "port") protocolPorts.current[prev.protocol] = String(value);
+      return { ...prev, [key]: value };
+    });
   };
 
-
   const switchProtocol = (protocol: Protocol) => {
-    update("protocol", protocol);
-    if (protocol === "ssh" && form.port === "3389") update("port", "22");
-    if (protocol === "rdp" && form.port === "22") update("port", "3389");
-    if (protocol === "telnet" && (form.port === "22" || form.port === "3389")) update("port", "23");
-    if (protocol === "vnc" && ["22", "3389", "23"].includes(form.port)) update("port", "5900");
+    setTestResult(null);
+    setForm((prev) => {
+      protocolPorts.current[prev.protocol] = prev.port;
+      return {
+        ...prev,
+        protocol,
+        port: protocolPorts.current[protocol] ?? DEFAULT_PORT_BY_PROTOCOL[protocol],
+      };
+    });
   };
 
   const buildSshTestProfile = (): Profile => {
@@ -1261,19 +1281,6 @@ export function SessionDialog({
                   </p>
                 )}
                 </div>
-                <div className={`test-conn-row${testResult ? ` is-${testResult.kind}` : ""}`}>
-                  <button
-                    type="button"
-                    className="btn-ghost"
-                    onClick={() => void handleTestConnection()}
-                    disabled={testing || saving}
-                  >
-                    {testing ? "正在测试…" : "测试连接"}
-                  </button>
-                  <span className="test-conn-result">
-                    {testResult ? testResult.message : "保存前可先验证主机、端口和凭据是否可用。"}
-                  </span>
-                </div>
               </div>
             </>
           )}
@@ -2070,8 +2077,23 @@ export function SessionDialog({
         </div>
 
         <div className="dlg-foot">
-          <span className="muted">密码/私钥加密保存在本地凭据库，不会写入配置文件。</span>
+          <span className={`test-conn-result${testResult ? ` is-${testResult.kind}` : ""}`}>
+            {form.protocol === "ssh"
+              ? testResult
+                ? testResult.message
+                : "密码/私钥加密保存在本地凭据库，不会写入配置文件。"
+              : "密码/私钥加密保存在本地凭据库，不会写入配置文件。"}
+          </span>
           <div className="spacer" />
+          {form.protocol === "ssh" && (
+            <button
+              className="btn-ghost"
+              onClick={() => void handleTestConnection()}
+              disabled={testing || saving}
+            >
+              {testing ? "正在测试…" : "测试连接"}
+            </button>
+          )}
           <button className="btn-ghost" onClick={onClose}>
             取消
           </button>

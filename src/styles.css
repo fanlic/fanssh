@@ -4531,8 +4531,7 @@ body.is-resizing {
    服务器监控面板（工作区右侧，卡片化）
 --------------------------------------------------------------------------- */
 .monitor-panel {
-  border-right: 0;
-  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
 }
 .monitor-body {
   flex: 1;
