@@ -1883,67 +1883,69 @@ export function SessionDialog({
                   );
                 })}
               </div>
-              <div className="key-actions">
+              <div className="tunnel-route-actions">
                 <button type="button" className="btn-ghost sm" onClick={() => addRoute()}>
                   + 添加路由
                 </button>
-                <span className="muted">快速填充</span>
-                <button
-                  type="button"
-                  className="btn-ghost sm"
-                  onClick={() =>
-                    addRoute({
-                      kind: "dynamic",
-                      local_port: 1080,
-                      remote_host: "",
-                      remote_port: 0,
-                    })
-                  }
-                >
-                  动态代理：SOCKS5 1080
-                </button>
-                <button
-                  type="button"
-                  className="btn-ghost sm"
-                  onClick={() =>
-                    addRoute({
-                      kind: "local",
-                      local_port: 3307,
-                      remote_host: "127.0.0.1",
-                      remote_port: 3306,
-                    })
-                  }
-                >
-                  本地转发：MySQL 本机 3307 → 远端 3306
-                </button>
-                <button
-                  type="button"
-                  className="btn-ghost sm"
-                  onClick={() =>
-                    addRoute({
-                      kind: "local",
-                      local_port: 8080,
-                      remote_host: "127.0.0.1",
-                      remote_port: 80,
-                    })
-                  }
-                >
-                  本地转发：Web 本机 8080 → 远端 80
-                </button>
-                <button
-                  type="button"
-                  className="btn-ghost sm"
-                  onClick={() =>
-                    addRoute({
-                      kind: "remote",
-                      local_port: 9000,
-                      remote_host: "127.0.0.1",
-                      remote_port: 3000,
-                    })
-                  }
-                >
-                  远程转发：服务器 9000 → 本机 3000
-                </button>
+                <div className="tunnel-route-presets">
+                  <span className="muted">快速填充</span>
+                  <button
+                    type="button"
+                    className="btn-ghost sm"
+                    onClick={() =>
+                      addRoute({
+                        kind: "dynamic",
+                        local_port: 1080,
+                        remote_host: "",
+                        remote_port: 0,
+                      })
+                    }
+                  >
+                    动态代理：SOCKS5 1080
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-ghost sm"
+                    onClick={() =>
+                      addRoute({
+                        kind: "local",
+                        local_port: 3307,
+                        remote_host: "127.0.0.1",
+                        remote_port: 3306,
+                      })
+                    }
+                  >
+                    本地转发：MySQL 本机 3307 → 远端 3306
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-ghost sm"
+                    onClick={() =>
+                      addRoute({
+                        kind: "local",
+                        local_port: 8080,
+                        remote_host: "127.0.0.1",
+                        remote_port: 80,
+                      })
+                    }
+                  >
+                    本地转发：Web 本机 8080 → 远端 80
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-ghost sm"
+                    onClick={() =>
+                      addRoute({
+                        kind: "remote",
+                        local_port: 9000,
+                        remote_host: "127.0.0.1",
+                        remote_port: 3000,
+                      })
+                    }
+                  >
+                    远程转发：服务器 9000 → 本机 3000
+                  </button>
+                </div>
               </div>
               {form.tunnel.routes.length === 0 && (
                 <p className="muted">至少添加一条路由并保存后，才能在隧道面板中启动。</p>
