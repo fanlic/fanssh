@@ -4812,3 +4812,38 @@ select option {
 select:disabled {
   color: var(--text-faint);
 }
+
+.dlg-protocol-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.dlg-protocol-select select {
+  min-width: 150px;
+  height: 30px;
+}
+
+.test-conn-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.test-conn-result {
+  min-width: 0;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.test-conn-result.is-ok {
+  color: var(--success);
+}
+
+.test-conn-result.is-error {
+  color: var(--danger);
+}

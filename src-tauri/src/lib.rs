@@ -36,6 +36,7 @@ pub fn run() {
             term_resize,
             term_close,
             term_auth_respond,
+            ssh_test_connection,
             read_text_file,
             docker_containers,
             docker_logs,

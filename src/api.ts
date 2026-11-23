@@ -140,6 +140,13 @@ export function profileDelete(id: string): Promise<void> {
   return invoke("profile_delete", { id });
 }
 
+export function sshTestConnection(
+  profile: Profile,
+  secrets: { password?: string | null; key_text?: string | null; passphrase?: string | null },
+): Promise<string> {
+  return invoke("ssh_test_connection", { profile, secrets });
+}
+
 export function profileExport(path: string, passphrase: string): Promise<number> {
   return invoke("profile_export", { path, passphrase });
 }

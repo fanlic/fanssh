@@ -4,6 +4,7 @@ import {
   errorText,
   profileUpsert,
   readTextFile,
+  sshTestConnection,
   serialListPorts,
   vaultPut,
 } from "../api";
@@ -350,6 +351,8 @@ export function SessionDialog({
 }: Props) {
   const [form, setForm] = useState<FormState>(() => toForm(initial, defaultProtocol));
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
   const [ports, setPorts] = useState<SerialPortInfo[]>([]);
   const [portsLoading, setPortsLoading] = useState(false);
   const [portsError, setPortsError] = useState<string | null>(null);
@@ -383,8 +386,76 @@ export function SessionDialog({
 
   if (!open) return null;
 
-  const update = <K extends keyof FormState>(key: K, value: FormState[K]) =>
+  const update = <K extends keyof FormState>(key: K, value: FormState[K]) => {
+    setTestResult(null);
     setForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+
+  const switchProtocol = (protocol: Protocol) => {
+    update("protocol", protocol);
+    if (protocol === "ssh" && form.port === "3389") update("port", "22");
+    if (protocol === "rdp" && form.port === "22") update("port", "3389");
+    if (protocol === "telnet" && (form.port === "22" || form.port === "3389")) update("port", "23");
+    if (protocol === "vnc" && ["22", "3389", "23"].includes(form.port)) update("port", "5900");
+  };
+
+  const buildSshTestProfile = (): Profile => {
+    if (!form.host.trim()) throw new Error("请填写主机地址");
+    if (!form.user.trim()) throw new Error("SSH 需要用户名");
+    const port = Number(form.port);
+    if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error("端口需要是 1 ~ 65535");
+    let auth: AuthRef;
+    if (form.authMode === "password") {
+      const existing = initial?.auth.kind === "password" ? initial.auth.secret : null;
+      if (!form.password.trim() && !existing) throw new Error("请填写密码");
+      auth = { kind: "password", secret: existing ?? crypto.randomUUID() };
+    } else if (form.authMode === "key") {
+      const existing = initial?.auth.kind === "key" ? initial.auth : null;
+      if (!form.keyText.trim() && !existing?.key) throw new Error("请粘贴或加载私钥内容");
+      auth = {
+        kind: "key",
+        key: existing?.key ?? crypto.randomUUID(),
+        passphrase: existing?.passphrase ?? null,
+      };
+    } else if (form.authMode === "keyboard_interactive") {
+      auth = { kind: "keyboard_interactive" };
+    } else {
+      auth = { kind: "none" };
+    }
+    return {
+      id: initial?.id ?? crypto.randomUUID(),
+      name: form.name.trim() || `${form.user.trim()}@${form.host.trim()}`,
+      group: form.group.trim() || null,
+      remark: form.remark.trim() || null,
+      protocol: "ssh",
+      target: { host: form.host.trim(), port, user: form.user.trim() },
+      auth,
+      jump: [],
+      tags: form.tags
+        .split(/[,，]/)
+        .map((tag) => tag.trim())
+        .filter(Boolean),
+      options: { ssh: normalizeSshPrefs(form.ssh) },
+    };
+  };
+
+  const handleTestConnection = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const message = await sshTestConnection(buildSshTestProfile(), {
+        password: form.password || null,
+        key_text: form.keyText || null,
+        passphrase: form.passphrase || null,
+      });
+      setTestResult({ kind: "ok", message });
+    } catch (error) {
+      setTestResult({ kind: "error", message: errorText(error) });
+    } finally {
+      setTesting(false);
+    }
+  };
 
   const updateSerial = (patch: Partial<SerialPrefs>) =>
     setForm((prev) => ({ ...prev, serial: { ...prev.serial, ...patch } }));
@@ -794,6 +865,17 @@ export function SessionDialog({
       <div className="dlg dlg-session">
         <div className="dlg-head">
           <h2>{initial ? "编辑连接" : "新建连接"}</h2>
+          <label className="dlg-protocol-select">
+            协议
+            <select value={form.protocol} onChange={(event) => switchProtocol(event.target.value as Protocol)}>
+              <option value="ssh">SSH 终端</option>
+              <option value="serial">串口</option>
+              <option value="rdp">RDP 远程桌面</option>
+              <option value="telnet">Telnet</option>
+              <option value="tunnel">隧道</option>
+              <option value="vnc">VNC</option>
+            </select>
+          </label>
           <div className="spacer" />
           <button className="icon-btn sm" title="关闭" onClick={onClose}>
             <Icon name="x" size={14} />
@@ -815,71 +897,6 @@ export function SessionDialog({
           </nav>
           <div className="dlg-form">
             <div id="sec-basic">
-          <div className="dlg-seg" role="tablist">
-            <button
-              role="tab"
-              aria-selected={form.protocol === "ssh"}
-              className={form.protocol === "ssh" ? "is-active" : ""}
-              onClick={() => {
-                update("protocol", "ssh");
-                if (form.port === "3389") update("port", "22");
-              }}
-            >
-              SSH 终端
-            </button>
-            <button
-              role="tab"
-              aria-selected={form.protocol === "serial"}
-              className={form.protocol === "serial" ? "is-active" : ""}
-              onClick={() => update("protocol", "serial")}
-            >
-              串口
-            </button>
-            <button
-              role="tab"
-              aria-selected={form.protocol === "rdp"}
-              className={form.protocol === "rdp" ? "is-active" : ""}
-              onClick={() => {
-                update("protocol", "rdp");
-                if (form.port === "22") update("port", "3389");
-              }}
-            >
-              RDP 远程桌面
-            </button>
-            <button
-              role="tab"
-              aria-selected={form.protocol === "telnet"}
-              className={form.protocol === "telnet" ? "is-active" : ""}
-              onClick={() => {
-                update("protocol", "telnet");
-                if (form.port === "22" || form.port === "3389") update("port", "23");
-              }}
-            >
-              Telnet
-            </button>
-            <button
-              role="tab"
-              aria-selected={form.protocol === "tunnel"}
-              className={form.protocol === "tunnel" ? "is-active" : ""}
-              onClick={() => update("protocol", "tunnel")}
-            >
-              隧道
-            </button>
-            <button
-              role="tab"
-              aria-selected={form.protocol === "vnc"}
-              className={form.protocol === "vnc" ? "is-active" : ""}
-              onClick={() => {
-                update("protocol", "vnc");
-                if (form.port === "22" || form.port === "3389" || form.port === "23") {
-                  update("port", "5900");
-                }
-              }}
-            >
-              VNC
-            </button>
-          </div>
-
           <div className="form-grid">
             <label>
               名称 *
@@ -1230,6 +1247,19 @@ export function SessionDialog({
                   <p className="update-hint span-2">
                     连接时服务端会逐轮返回提示，弹窗输入 OTP / 安全问题等内容；输入不会保存到本地。
                   </p>
+                )}
+              </div>
+              <div className="test-conn-row">
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={() => void handleTestConnection()}
+                  disabled={testing || saving}
+                >
+                  {testing ? "正在测试…" : "测试连接"}
+                </button>
+                {testResult && (
+                  <span className={`test-conn-result is-${testResult.kind}`}>{testResult.message}</span>
                 )}
               </div>
             </>

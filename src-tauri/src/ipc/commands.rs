@@ -18,7 +18,122 @@ use crate::monitor::MonitorEvent;
 use crate::profile::ImportError;
 use crate::serial::SerialManager;
 use crate::session::model::{AuthRef, Profile, Protocol, SecretKind, SessionId};
-use crate::vault::SecretRef;
+use crate::transport::ssh::connect_profile;
+use crate::vault::{SecretRef, Vault};
+
+#[derive(serde::Deserialize)]
+pub struct SshTestSecrets {
+    #[serde(default)]
+    password: Option<String>,
+    #[serde(default)]
+    key_text: Option<String>,
+    #[serde(default)]
+    passphrase: Option<String>,
+}
+
+#[tauri::command]
+pub async fn ssh_test_connection(
+    state: State<'_, AppState>,
+    mut profile: Profile,
+    secrets: SshTestSecrets,
+) -> AppResult<String> {
+    if !matches!(profile.protocol, Protocol::Ssh) {
+        return Err(AppError::new("ssh.unsupported", "测试连接仅支持 SSH 配置"));
+    }
+    let temp_dir = std::env::temp_dir().join(format!("fanssh-test-{}", Uuid::new_v4()));
+    let temp_vault = Vault::open(&temp_dir)
+        .map_err(|e| AppError::new("ssh.test_failed", format!("创建临时凭据库失败：{e:#}")))?;
+    match &mut profile.auth {
+        AuthRef::Password { secret } => {
+            let password = match secrets
+                .password
+                .as_deref()
+                .filter(|item| !item.trim().is_empty())
+            {
+                Some(password) => password.to_string(),
+                None => state
+                    .vault
+                    .get(secret)
+                    .map_err(|e| {
+                        AppError::new("ssh.test_failed", format!("读取已保存密码失败：{e:#}"))
+                    })?
+                    .to_string(),
+            };
+            *secret = temp_vault
+                .put(None, SecretKind::Password, "测试密码", &password)
+                .map_err(|e| {
+                    AppError::new("ssh.test_failed", format!("写入临时密码失败：{e:#}"))
+                })?;
+        }
+        AuthRef::Key { key, passphrase } => {
+            let key_text = match secrets
+                .key_text
+                .as_deref()
+                .filter(|item| !item.trim().is_empty())
+            {
+                Some(text) => text.to_string(),
+                None => state
+                    .vault
+                    .get(key)
+                    .map_err(|e| {
+                        AppError::new("ssh.test_failed", format!("读取已保存私钥失败：{e:#}"))
+                    })?
+                    .to_string(),
+            };
+            *key = temp_vault
+                .put(None, SecretKind::PrivateKey, "测试私钥", &key_text)
+                .map_err(|e| {
+                    AppError::new("ssh.test_failed", format!("写入临时私钥失败：{e:#}"))
+                })?;
+
+            let next_passphrase = match secrets
+                .passphrase
+                .as_deref()
+                .filter(|item| !item.trim().is_empty())
+            {
+                Some(text) => Some(text.to_string()),
+                None => passphrase
+                    .as_ref()
+                    .and_then(|id| state.vault.get(id).ok().map(|text| text.to_string())),
+            };
+            *passphrase = match next_passphrase {
+                Some(text) => Some(
+                    temp_vault
+                        .put(None, SecretKind::Passphrase, "测试私钥口令", &text)
+                        .map_err(|e| {
+                            AppError::new("ssh.test_failed", format!("写入临时私钥口令失败：{e:#}"))
+                        })?,
+                ),
+                None => None,
+            };
+        }
+        AuthRef::KeyboardInteractive => {
+            return Err(AppError::new(
+                "ssh.test_unsupported",
+                "交互认证需要服务端动态提示，请保存后打开连接进行测试",
+            ));
+        }
+        AuthRef::None => {}
+    }
+    let result = connect_profile(&profile, &temp_vault, state.known_hosts.clone(), None).await;
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    match result {
+        Ok(connected) => {
+            let _ = connected
+                .handle
+                .disconnect(russh::Disconnect::ByApplication, "test complete", "en")
+                .await;
+            Ok(format!(
+                "连接成功：{}@{}:{}",
+                profile.target.user, profile.target.host, profile.target.port
+            ))
+        }
+        Err(error) => Err(AppError::new(
+            "ssh.test_failed",
+            format!("连接测试失败：{error:#}"),
+        )),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // 终端
