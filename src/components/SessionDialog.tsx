@@ -926,15 +926,17 @@ export function SessionDialog({
               分组
               <input value={form.group} onChange={(e) => update("group", e.target.value)} placeholder="生产环境" />
             </label>
-            <label>
-              标签
-              <input value={form.tags} onChange={(e) => update("tags", e.target.value)} placeholder="web, prod" />
-            </label>
+            {form.protocol !== "ssh" && (
+              <label>
+                标签
+                <input value={form.tags} onChange={(e) => update("tags", e.target.value)} placeholder="web, prod" />
+              </label>
+            )}
           </div>
 
           {form.protocol !== "serial" && form.protocol !== "tunnel" && (
-            <div className="form-grid">
-              <label className="span-2">
+            <div className={form.protocol === "ssh" ? "form-grid ssh-address-grid" : "form-grid"}>
+              <label className={form.protocol === "ssh" ? undefined : "span-2"}>
                 主机 *
                 <input value={form.host} onChange={(e) => update("host", e.target.value)} placeholder="10.0.0.10 或 example.com" />
               </label>
@@ -942,7 +944,7 @@ export function SessionDialog({
                 端口 *
                 <input value={form.port} onChange={(e) => update("port", e.target.value)} />
               </label>
-              {form.protocol !== "vnc" && (
+              {form.protocol !== "vnc" && form.protocol !== "ssh" && (
                 <label>
                   用户名
                   <input
@@ -1173,7 +1175,84 @@ export function SessionDialog({
 
           {form.protocol === "ssh" && (
             <>
+              <div className="dlg-subcard auth-card">
+                <div className="form-grid">
+                  <label className="span-2">
+                    验证方式
+                    <select
+                      value={form.authMode}
+                      onChange={(e) => update("authMode", e.target.value as AuthMode)}
+                    >
+                      <option value="password">密码</option>
+                      <option value="key">私钥</option>
+                      <option value="keyboard_interactive">交互认证</option>
+                    </select>
+                  </label>
+                  <label className={form.authMode === "password" ? undefined : "span-2"}>
+                    登录用户 *
+                    <input value={form.user} onChange={(e) => update("user", e.target.value)} placeholder="root" />
+                  </label>
+                  {form.authMode === "password" && (
+                    <label>
+                      登录密码
+                      <input
+                        type="password"
+                        value={form.password}
+                        onChange={(e) => update("password", e.target.value)}
+                        placeholder={existingPasswordSecret(initial) ? "留空沿用已保存密码" : ""}
+                      />
+                    </label>
+                  )}
+                  {form.authMode === "key" && (
+                    <>
+                      <label className="span-2">
+                        登录秘钥
+                        <textarea
+                          rows={5}
+                          value={form.keyText}
+                          onChange={(e) => update("keyText", e.target.value)}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            const file = e.dataTransfer.files[0];
+                            if (file) void file.text().then((text) => update("keyText", text));
+                          }}
+                          placeholder={
+                            existingKeySecrets(initial).key
+                              ? "已保存私钥，留空则不修改"
+                              : "-----BEGIN OPENSSH PRIVATE KEY-----（也可拖拽文件到此处）"
+                          }
+                        />
+                      </label>
+                      <div className="span-2 key-actions">
+                        <button type="button" className="btn-ghost sm" onClick={() => void loadKeyFile(null)}>
+                          加载本地秘钥
+                        </button>
+                        <span className="muted">或把私钥文件拖拽到上方输入框</span>
+                      </div>
+                      <label>
+                        私钥口令（可选）
+                        <input
+                          type="password"
+                          value={form.passphrase}
+                          onChange={(e) => update("passphrase", e.target.value)}
+                          placeholder={existingKeySecrets(initial).pass ? "已保存口令" : ""}
+                        />
+                      </label>
+                    </>
+                  )}
+                  {form.authMode === "keyboard_interactive" && (
+                    <p className="update-hint span-2">
+                      连接时服务端会逐轮返回提示，弹窗输入 OTP / 安全问题等内容；输入不会保存到本地。
+                    </p>
+                  )}
+                </div>
+              </div>
               <div className="form-grid">
+                <label>
+                  标签
+                  <input value={form.tags} onChange={(e) => update("tags", e.target.value)} placeholder="web, prod" />
+                </label>
                 <label className="span-2">
                   主机备注
                   <textarea
@@ -1199,88 +1278,6 @@ export function SessionDialog({
                     placeholder="5000，0 表示关闭"
                   />
                 </label>
-              </div>
-
-              <div className="dlg-subcard auth-card">
-                <div className="dlg-card-head">
-                  <div>
-                    <div className="section-title">认证</div>
-                    <p className="dlg-card-desc">凭据加密保存在本地，测试连接不会保存新输入的密码或私钥。</p>
-                  </div>
-                  {initial?.auth.kind !== "none" && <span className="saved-secret-pill">已保存凭据</span>}
-                </div>
-                <div className="auth-methods" role="group" aria-label="SSH 验证方式">
-                  {([
-                    ["password", "密码"],
-                    ["key", "私钥"],
-                    ["keyboard_interactive", "交互认证"],
-                  ] as Array<[AuthMode, string]>).map(([mode, label]) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      className={`auth-method${form.authMode === mode ? " is-active" : ""}`}
-                      onClick={() => update("authMode", mode)}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                <div className="form-grid">
-                  {form.authMode === "password" && (
-                  <label className="span-2">
-                    密码 {existingPasswordSecret(initial) && <span className="muted">（留空沿用已保存密码）</span>}
-                    <input
-                      type="password"
-                      value={form.password}
-                      onChange={(e) => update("password", e.target.value)}
-                      placeholder={existingPasswordSecret(initial) ? "••••••••" : ""}
-                    />
-                  </label>
-                )}
-                {form.authMode === "key" && (
-                  <>
-                    <label className="span-2">
-                      登录秘钥
-                      <textarea
-                        rows={5}
-                        value={form.keyText}
-                        onChange={(e) => update("keyText", e.target.value)}
-                        onDragOver={(e) => e.preventDefault()}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          const file = e.dataTransfer.files[0];
-                          if (file) void file.text().then((text) => update("keyText", text));
-                        }}
-                        placeholder={
-                          existingKeySecrets(initial).key
-                            ? "已保存私钥，留空则不修改"
-                            : "-----BEGIN OPENSSH PRIVATE KEY-----（也可拖拽文件到此处）"
-                        }
-                      />
-                    </label>
-                    <div className="span-2 key-actions">
-                      <button type="button" className="btn-ghost sm" onClick={() => void loadKeyFile(null)}>
-                        加载本地秘钥
-                      </button>
-                      <span className="muted">或把私钥文件拖拽到上方输入框</span>
-                    </div>
-                    <label>
-                      私钥口令（可选）
-                      <input
-                        type="password"
-                        value={form.passphrase}
-                        onChange={(e) => update("passphrase", e.target.value)}
-                        placeholder={existingKeySecrets(initial).pass ? "已保存口令" : ""}
-                      />
-                    </label>
-                  </>
-                )}
-                {form.authMode === "keyboard_interactive" && (
-                  <p className="update-hint span-2">
-                    连接时服务端会逐轮返回提示，弹窗输入 OTP / 安全问题等内容；输入不会保存到本地。
-                  </p>
-                )}
-                </div>
               </div>
             </>
           )}
@@ -2077,14 +2074,6 @@ export function SessionDialog({
         </div>
 
         <div className="dlg-foot">
-          <span className={`test-conn-result${testResult ? ` is-${testResult.kind}` : ""}`}>
-            {form.protocol === "ssh"
-              ? testResult
-                ? testResult.message
-                : "密码/私钥加密保存在本地凭据库，不会写入配置文件。"
-              : "密码/私钥加密保存在本地凭据库，不会写入配置文件。"}
-          </span>
-          <div className="spacer" />
           {form.protocol === "ssh" && (
             <button
               className="btn-ghost"
@@ -2094,11 +2083,15 @@ export function SessionDialog({
               {testing ? "正在测试…" : "测试连接"}
             </button>
           )}
+          <span className={`test-conn-result${testResult ? ` is-${testResult.kind}` : ""}`} role="status">
+            {testResult?.message}
+          </span>
+          <div className="spacer" />
           <button className="btn-ghost" onClick={onClose}>
             取消
           </button>
           <button className="btn-primary" onClick={handleSave} disabled={saving}>
-            {saving ? "保存中…" : "保存"}
+            {saving ? "保存中…" : initial ? "保存" : "创建"}
           </button>
         </div>
       </div>

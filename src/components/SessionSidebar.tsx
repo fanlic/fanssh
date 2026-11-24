@@ -13,7 +13,7 @@ interface Props {
   onOpenTunnel: (profile: Profile) => void;
   onNotice: (message: string, kind?: "info" | "error") => void;
   query: string;
-  onQueryChange: (value: string) => void;
+  onClearSearch: () => void;
   /** 顶部协议 tab 当前选中的协议，用于同步侧栏过滤与新建按钮文案。 */
   proto?: ProtoFilter;
   onCollapse?: () => void;
@@ -48,7 +48,7 @@ export function SessionSidebar({
   onOpenTunnel,
   onNotice,
   query,
-  onQueryChange,
+  onClearSearch,
   proto,
   onCollapse,
 }: Props) {
@@ -284,20 +284,6 @@ export function SessionSidebar({
         </button>
       </div>
 
-      <div className="sb-search">
-        <Icon name="search" size={13} />
-        <input
-          value={query}
-          placeholder="搜索连接、主机、分组"
-          onChange={(event) => onQueryChange(event.target.value)}
-        />
-        {query && (
-          <button title="清空搜索" onClick={() => onQueryChange("")}>
-            <Icon name="x" size={11} />
-          </button>
-        )}
-      </div>
-
       <div className="sb-list">
         {loading && <div className="sb-hint">加载中…</div>}
         {error && <div className="sb-hint err">{error}</div>}
@@ -423,7 +409,7 @@ export function SessionSidebar({
             </span>
             <div className="empty-title">没有匹配的会话</div>
             <div className="empty-desc">试试更短的关键词，或切换协议</div>
-            <button className="btn-ghost sm" onClick={() => onQueryChange("")}>
+            <button className="btn-ghost sm" onClick={onClearSearch}>
               清除搜索
             </button>
           </div>

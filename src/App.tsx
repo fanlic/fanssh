@@ -70,6 +70,13 @@ export default function App() {
   const appearance = useUiSettingsStore((s) => s.settings.appearance);
   const stageRef = useRef<HTMLDivElement>(null);
   const quickSearchRef = useRef<HTMLInputElement>(null);
+  const focusConnectionSearch = () => {
+    setSidebarOpen(true);
+    requestAnimationFrame(() => {
+      quickSearchRef.current?.focus();
+      quickSearchRef.current?.select();
+    });
+  };
 
   useEffect(() => {
     void loadProfiles();
@@ -152,9 +159,7 @@ export default function App() {
             setSettingsOpen(true);
             break;
           case "global_search":
-            setSidebarOpen(true);
-            quickSearchRef.current?.focus();
-            quickSearchRef.current?.select();
+            focusConnectionSearch();
             break;
           case "next_tab":
           case "prev_tab": {
@@ -209,6 +214,10 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toggleAi]);
+
+  useEffect(() => {
+    setSidebarOpen(!activeTabId);
+  }, [activeTabId]);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId);
   const activePane = activeTab?.panes[activeTab.activePane] ?? null;
@@ -441,15 +450,15 @@ export default function App() {
   };
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${!sidebarOpen && tabs.length > 0 ? " is-terminal-view" : ""}`}>
       <header className="titlebar">
         <div className="tb-icons">
           <button
             className={`tb-slot${sidebarOpen ? " is-active" : ""}`}
-            title={sidebarOpen ? "收起会话列表 (Ctrl Shift B)" : "展开会话列表 (Ctrl Shift B)"}
+            title={sidebarOpen ? "收起资产管理 (Ctrl Shift B)" : "打开资产管理 (Ctrl Shift B)"}
             onClick={() => setSidebarOpen((value) => !value)}
           >
-            <Icon name="term" size={14} />
+            <Icon name="link" size={14} />
           </button>
           <button className="tb-slot" title="新建连接" onClick={handleNew}>
             <Icon name="plus" size={14} />
@@ -469,32 +478,10 @@ export default function App() {
             <Icon name="docker" size={14} />
           </button>
         </div>
-        <div className="tb-quick">
-          <Icon name="search" size={13} />
-          <input
-            ref={quickSearchRef}
-            value={query}
-            placeholder="快速连接或搜索会话"
-            onChange={(event) => {
-              setQuery(event.target.value);
-              setSidebarOpen(true);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                setQuery("");
-                quickSearchRef.current?.blur();
-              }
-            }}
-          />
-          {query ? (
-            <button className="tb-clear" title="清空搜索" onClick={() => setQuery("")}>
-              <Icon name="x" size={11} />
-            </button>
-          ) : (
-            <kbd>Ctrl Shift F</kbd>
-          )}
-        </div>
         <div className="tb-right">
+          <button className="tb-slot" title="搜索连接 (Ctrl Shift F)" onClick={focusConnectionSearch}>
+            <Icon name="search" size={14} />
+          </button>
           <span className="brand-ver">v{version}</span>
           <button className="tb-gear" title="设置 (Ctrl ,)" onClick={() => setSettingsOpen(true)}>
             <Icon name="gear" size={18} />
@@ -553,18 +540,41 @@ export default function App() {
             onOpenTunnel={setTunnelProfile}
             onNotice={notify}
             query={query}
-            onQueryChange={setQuery}
+            onClearSearch={() => setQuery("")}
           />
         )}
 
         <main className="workspace">
+          {sidebarOpen && (
+            <div className="connection-toolbar">
+              <span>全部</span>
+              <div className="tb-quick">
+                <Icon name="search" size={13} />
+                <input
+                  ref={quickSearchRef}
+                  value={query}
+                  placeholder="快速连接或搜索会话"
+                  onChange={(event) => setQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      setQuery("");
+                      quickSearchRef.current?.blur();
+                    }
+                  }}
+                />
+                {query ? (
+                  <button className="tb-clear" title="清空搜索" onClick={() => setQuery("")}>
+                    <Icon name="x" size={11} />
+                  </button>
+                ) : (
+                  <kbd>Ctrl Shift F</kbd>
+                )}
+              </div>
+            </div>
+          )}
           <TabBar
             onSplit={handleSplit}
-            onOpenSearch={() => {
-              setSidebarOpen(true);
-              quickSearchRef.current?.focus();
-              quickSearchRef.current?.select();
-            }}
+            onOpenSearch={focusConnectionSearch}
             onNew={handleNew}
             onManage={() => {
               setSidebarOpen(true);

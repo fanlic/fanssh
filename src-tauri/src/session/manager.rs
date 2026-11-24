@@ -492,15 +492,10 @@ impl EncodingDecoder {
     }
 
     fn push(&mut self, chunk: &[u8]) -> Option<String> {
-        let mut out = String::new();
-        let mut src = chunk;
-        while !src.is_empty() {
-            let (_, read, _) = self.decoder.decode_to_string(src, &mut out, false);
-            if read == 0 {
-                break;
-            }
-            src = &src[read..];
-        }
+        let capacity = self.decoder.max_utf8_buffer_length(chunk.len())?;
+        let mut out = String::with_capacity(capacity);
+        let (result, _, _) = self.decoder.decode_to_string(chunk, &mut out, false);
+        debug_assert_eq!(result, encoding_rs::CoderResult::InputEmpty);
         if out.is_empty() {
             None
         } else {
@@ -509,7 +504,8 @@ impl EncodingDecoder {
     }
 
     fn finish(&mut self) -> Option<String> {
-        let mut out = String::new();
+        let capacity = self.decoder.max_utf8_buffer_length(0)?;
+        let mut out = String::with_capacity(capacity);
         let _ = self.decoder.decode_to_string(&[], &mut out, true);
         if out.is_empty() {
             None
@@ -564,5 +560,23 @@ impl Utf8Decoder {
         } else {
             Some(out)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EncodingDecoder;
+
+    #[test]
+    fn ssh_output_decodes_across_packet_boundaries() {
+        let mut decoder = EncodingDecoder::new(encoding_rs::UTF_8);
+        assert_eq!(decoder.push(b"prompt$ ").as_deref(), Some("prompt$ "));
+
+        let bytes = "中".as_bytes();
+        assert_eq!(decoder.push(&bytes[..1]), None);
+        assert_eq!(decoder.push(&bytes[1..]).as_deref(), Some("中"));
+
+        assert_eq!(decoder.push(&bytes[..1]), None);
+        assert_eq!(decoder.finish().as_deref(), Some("�"));
     }
 }

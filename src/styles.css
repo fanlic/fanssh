@@ -4976,51 +4976,6 @@ select:disabled {
   line-height: 18px;
 }
 
-/* XTerminal-style connection center polish */
-.sb-search {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0 8px 8px;
-  padding: 0 8px;
-  height: 30px;
-  flex: none;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-2);
-  background: var(--input-bg);
-  color: var(--text-dim);
-}
-.sb-search:focus-within {
-  border-color: var(--accent);
-  color: var(--text);
-}
-.sb-search input {
-  flex: 1;
-  min-width: 0;
-  height: 28px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  font-size: 12px;
-}
-.sb-search input:focus {
-  outline: none;
-}
-.sb-search button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: var(--radius-1);
-  color: var(--text-dim);
-}
-.sb-search button:hover {
-  background: var(--hover);
-  color: var(--text);
-}
-
 /* Fix focus and asset tree selection layering */
 .session.is-open {
   background: transparent;
@@ -5044,4 +4999,32 @@ select:disabled {
 }
 .terminal-host .xterm {
   height: 100%;
+}
+
+.titlebar .tb-right {
+  margin-inline-start: auto;
+}
+
+.connection-toolbar {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 10px;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.connection-toolbar .tb-quick {
+  flex: 0 1 320px;
+  margin: 0;
+  min-width: 0;
+}
+
+.is-terminal-view .protobar {
+  display: none;
+}
+
+.form-grid.ssh-address-grid {
+  grid-template-columns: minmax(0, 3fr) minmax(0, 1fr);
 }
