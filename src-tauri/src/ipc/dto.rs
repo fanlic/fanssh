@@ -7,7 +7,9 @@ use crate::session::model::ChatMessage;
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum SessionState {
     Connecting,
+    VerifyingHost,
     Authenticating,
+    OpeningShell,
     Ready,
     Closed { reason: String },
 }
@@ -33,6 +35,13 @@ pub enum TermEvent {
     Error {
         code: String,
         message: String,
+    },
+    HostKeyPrompt {
+        prompt_id: Uuid,
+        host: String,
+        port: u16,
+        algorithm: String,
+        fingerprint: String,
     },
     /// 键盘交互认证：把服务端 prompt 交给前端，等待用户输入后继续。
     AuthPrompt {
@@ -339,9 +348,6 @@ pub struct UpdateInfoDto {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UpdateEvent {
     Downloading,
-    Progress {
-        downloaded: u64,
-        total: Option<u64>,
-    },
+    Progress { downloaded: u64, total: Option<u64> },
     Installed,
 }

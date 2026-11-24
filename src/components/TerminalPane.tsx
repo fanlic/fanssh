@@ -6,6 +6,7 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import {
   errorText,
+  localTermOpen,
   serialClose,
   serialInput,
   serialOpen,
@@ -14,6 +15,7 @@ import {
   telnetInput,
   telnetOpen,
   termAuthRespond,
+  termHostKeyRespond,
   termClose,
   termInput,
   termOpen,
@@ -29,7 +31,8 @@ import {
 import { terminalRegistry } from "../lib/terminalRegistry";
 import { useAppStore, type PaneState } from "../store";
 import { useUiSettingsStore } from "../uiSettings";
-import type { TermEvent } from "../types";
+import type { HostKeyPrompt, TermEvent } from "../types";
+import { HostKeyDialog } from "./HostKeyDialog";
 import { Icon } from "./Icon";
 
 function buildTheme(accent: string) {
@@ -99,6 +102,8 @@ export function TerminalPane({ tabId, pane, active }: Props) {
     hasSelection: boolean;
     selection: string;
   } | null>(null);
+  const [hostKeyPrompt, setHostKeyPrompt] = useState<HostKeyPrompt | null>(null);
+  const [sshStage, setSshStage] = useState(0);
   const [authPrompt, setAuthPrompt] = useState<{
     promptId: string;
     name: string;
@@ -117,7 +122,8 @@ export function TerminalPane({ tabId, pane, active }: Props) {
   const profile = useAppStore((s) => s.profiles.find((item) => item.id === pane.profileId));
   const isSerial = profile?.protocol === "serial";
   const isTelnet = profile?.protocol === "telnet";
-  const isSsh = profile?.protocol === "ssh";
+  const isLocal = pane.localShell !== undefined;
+  const hasShell = isLocal || profile?.protocol === "ssh";
   const serialPrefs = profile?.options.serial ?? null;
   // 串口控制线状态；连接后可在面板顶部实时切换。
   const [lines, setLines] = useState(() => ({
@@ -194,14 +200,14 @@ export function TerminalPane({ tabId, pane, active }: Props) {
       }
       // 串口没有 PTY 尺寸概念，Telnet 也不上报窗口大小，不做远端 resize
       if (sessionRef.current && !isSerial && !isTelnet) {
-        termResize(sessionRef.current, term.cols, term.rows).catch(() => undefined);
+        termResize(sessionRef.current, term.cols, term.rows, isLocal).catch(() => undefined);
       }
     };
     const raf = window.requestAnimationFrame(doFit);
     const observer = new ResizeObserver(() => doFit());
     observer.observe(host);
 
-    // ---- 命令候选：仅 SSH 会话启用；串口/RDP 没有可用的 shell 输入行 ----
+    // SSH 和本地 Shell 共用命令候选。
     let trackInput: (data: string) => void = () => {};
     let noteOutput: (text: string) => void = () => {};
 
@@ -222,23 +228,16 @@ export function TerminalPane({ tabId, pane, active }: Props) {
       return false;
     };
 
-    if (isSsh) {
-      const bucket = `${profile.target.user}@${profile.target.host}`;
+    if (hasShell) {
+      const bucket = profile ? `${profile.target.user}@${profile.target.host}` : `local:${pane.localShell}`;
       let history = loadHistory(bucket);
       let line = "";
       let tokenStart = 0;
       let tokenText = "";
       let outputTail = "";
       let passwordPrompt = false;
+      let trackingLine = true;
       const ghost = ghostRef.current;
-
-      // 推测（官方文档未明确）：Xterminal 的命令历史依赖 Shell Integration 的命令边界，
-      // 密码提示不属于命令，因此这里按“密码提示处不写历史”处理，安全优先。
-      // 参考命令块/历史文档：https://docs.xterminal.cn/terminal/command-blocks
-      noteOutput = (text: string) => {
-        outputTail = (outputTail + text).slice(-240);
-        passwordPrompt = /(?:password|passphrase|密码)[^\n]{0,60}[:：]\s*$/i.test(outputTail);
-      };
 
       const hideAll = () => {
         completionsRef.current = [];
@@ -252,6 +251,15 @@ export function TerminalPane({ tabId, pane, active }: Props) {
         }
       };
 
+      noteOutput = (text: string) => {
+        outputTail = (outputTail + text).slice(-240);
+        if (/(?:password|passphrase|密码)[^\n]{0,60}[:：]\s*$/i.test(outputTail)) {
+          passwordPrompt = true;
+          line = "";
+          hideAll();
+        }
+      };
+
       const cursorMetrics = () => {
         const screen = host.querySelector(".xterm-screen") as HTMLElement | null;
         const paneEl = host.parentElement;
@@ -261,7 +269,7 @@ export function TerminalPane({ tabId, pane, active }: Props) {
         const buffer = term.buffer.active;
         const cellW = screenRect.width / term.cols;
         const cellH = screenRect.height / term.rows;
-        const row = buffer.cursorY - buffer.viewportY;
+        const row = buffer.cursorY + buffer.baseY - buffer.viewportY;
         return {
           paneRect,
           cellW,
@@ -291,7 +299,7 @@ export function TerminalPane({ tabId, pane, active }: Props) {
       };
 
       const refresh = () => {
-        if (!line.trim()) {
+        if (passwordPrompt || term.buffer.active.type !== "normal" || !line.trim()) {
           hideAll();
           return;
         }
@@ -324,13 +332,15 @@ export function TerminalPane({ tabId, pane, active }: Props) {
         const item = completionsRef.current[index];
         if (!item) return;
         // 只回退并替换当前 token，避免覆盖整行。
-        const removeCount = Array.from(line.slice(tokenStart)).length;
-        const payload = `${"\x7f".repeat(removeCount)}${item.value}`;
+        const token = line.slice(tokenStart);
+        const payload = item.value.startsWith(token)
+          ? item.value.slice(token.length)
+          : `${"\x7f".repeat(Array.from(token).length)}${item.value}`;
         line = line.slice(0, tokenStart) + item.value;
         hideAll();
         const session = sessionRef.current;
         if (session) {
-          termInput(session, new TextEncoder().encode(payload)).catch(() => undefined);
+          termInput(session, new TextEncoder().encode(payload), isLocal).catch(() => undefined);
         }
       };
       acceptRef.current = accept;
@@ -338,33 +348,35 @@ export function TerminalPane({ tabId, pane, active }: Props) {
       trackInput = (data: string) => {
         if (data === "\r") {
           const command = line.trim();
-          if (command && !passwordPrompt) history = rememberCommand(bucket, command);
+          if (command && !passwordPrompt && trackingLine) history = rememberCommand(bucket, command);
           line = "";
           passwordPrompt = false;
+          trackingLine = true;
           outputTail = "";
           hideAll();
           return;
         }
-        if (data === "\t") {
-          hideAll();
-          return;
-        }
+        if (passwordPrompt) return;
         if (data === "\x7f") {
-          line = line.slice(0, -1);
+          if (!trackingLine) return;
+          line = Array.from(line).slice(0, -1).join("");
           refresh();
           return;
         }
         if (data === "\x03" || data === "\x15") {
           line = "";
+          trackingLine = true;
           hideAll();
           return;
         }
         // 普通文本（含 IME 上屏的多字符）；控制序列一律视为光标不可跟踪。
         if (!/[\x00-\x1f\x7f]/.test(data)) {
+          if (!trackingLine) return;
           line += data;
           refresh();
           return;
         }
+        trackingLine = false;
         hideAll();
       };
 
@@ -388,25 +400,12 @@ export function TerminalPane({ tabId, pane, active }: Props) {
           return true;
         }
         if (list.length === 0) return true;
-        // 依据：https://docs.xterminal.cn/reference/shortcuts
-        // Xterminal 把 Tab 列为 Shell 标准键（命令/文件名补全），终端不拦截。
-        if (event.key === "Tab") {
-          hideAll();
-          return true;
-        }
-        // 依据：https://docs.xterminal.cn/terminal/command-completion
-        // 候选确认键为 Enter（或鼠标点击），只填入、不执行。
-        if (event.key === "Enter") {
+        if (event.key === "Tab" && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
           event.preventDefault();
           accept(completionIndexRef.current);
           return false;
         }
         if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-          if (list.length < 2) {
-            // 单条候选时把方向键让给远端 shell 的历史记录
-            hideAll();
-            return true;
-          }
           event.preventDefault();
           const delta = event.key === "ArrowDown" ? 1 : -1;
           const next = (completionIndexRef.current + delta + list.length) % list.length;
@@ -428,7 +427,9 @@ export function TerminalPane({ tabId, pane, active }: Props) {
       });
 
       // 滚动/回看历史时输入行位置不可靠，直接收起候选，避免浮层错位。
-      term.onScroll(() => hideAll());
+      term.onScroll((viewportY) => {
+        if (viewportY !== term.buffer.active.baseY) hideAll();
+      });
     } else {
       // 串口没有候选列表，但复制/搜索仍可用。
       term.attachCustomKeyEventHandler((event) => {
@@ -461,7 +462,7 @@ export function TerminalPane({ tabId, pane, active }: Props) {
         ? serialClose(session)
         : isTelnet
           ? telnetClose(session)
-          : termClose(session);
+          : termClose(session, isLocal);
       request.catch(() => undefined);
     };
     const dataSub = term.onData((data) => {
@@ -487,7 +488,7 @@ export function TerminalPane({ tabId, pane, active }: Props) {
       }
       trackInput(data);
       if (session) {
-        termInput(session, new TextEncoder().encode(data)).catch((error) => {
+        termInput(session, new TextEncoder().encode(data), isLocal).catch((error) => {
           term.writeln(`\r\n\x1b[31m写入失败: ${errorText(error)}\x1b[0m`);
         });
       }
@@ -503,11 +504,18 @@ export function TerminalPane({ tabId, pane, active }: Props) {
       const previous = sessionRef.current;
       if (previous) {
         sessionRef.current = null;
+        setPaneSession(tabId, pane.key, null);
         closeSession(previous);
       }
+      setSshStage(0);
       setPaneStatus(tabId, pane.key, "connecting", "连接中…");
       const onEvent = (event: TermEvent) => {
-        if (current !== generation) return;
+        if (disposedRef.current || current !== generation) {
+          if (event.type === "host_key_prompt") {
+            void termHostKeyRespond(event.prompt_id, "cancel").catch(() => undefined);
+          }
+          return;
+        }
         switch (event.type) {
           case "data":
             term.write(event.text);
@@ -516,8 +524,15 @@ export function TerminalPane({ tabId, pane, active }: Props) {
           case "state":
             if (event.state.state === "connecting") {
               setPaneStatus(tabId, pane.key, "connecting", "连接中…");
+            } else if (event.state.state === "verifying_host") {
+              setSshStage(1);
+              setPaneStatus(tabId, pane.key, "connecting", "正在校验主机指纹…");
             } else if (event.state.state === "authenticating") {
+              setSshStage(2);
               setPaneStatus(tabId, pane.key, "connecting", "认证中…");
+            } else if (event.state.state === "opening_shell") {
+              setSshStage(3);
+              setPaneStatus(tabId, pane.key, "connecting", "正在打开终端…");
             } else if (event.state.state === "ready") {
               setAuthPrompt(null);
               setPaneStatus(tabId, pane.key, "ready", "已连接");
@@ -526,6 +541,11 @@ export function TerminalPane({ tabId, pane, active }: Props) {
               setAuthPrompt(null);
               setPaneStatus(tabId, pane.key, "closed", event.state.reason ?? "已断开");
             }
+            break;
+          case "host_key_prompt":
+            setHostKeyPrompt(event);
+            setSshStage(1);
+            setPaneStatus(tabId, pane.key, "connecting", "等待确认主机指纹…");
             break;
           case "auth_prompt":
             setAuthPrompt({
@@ -558,7 +578,9 @@ export function TerminalPane({ tabId, pane, active }: Props) {
       };
 
       try {
-        const session = isSerial
+        const session = pane.localShell
+          ? await localTermOpen(pane.localShell, term.cols, term.rows, onEvent)
+          : isSerial
           ? await serialOpen(pane.profileId, onEvent)
           : isTelnet
             ? await telnetOpen(pane.profileId, onEvent)
@@ -584,6 +606,8 @@ export function TerminalPane({ tabId, pane, active }: Props) {
         }
       } catch (error) {
         if (disposedRef.current) return;
+        setHostKeyPrompt(null);
+        setAuthPrompt(null);
         setPaneStatus(tabId, pane.key, "error", errorText(error));
         term.writeln(`\r\n\x1b[31m连接失败: ${errorText(error)}\x1b[0m`);
         term.writeln("关闭该面板后重新连接。");
@@ -739,8 +763,8 @@ export function TerminalPane({ tabId, pane, active }: Props) {
 
   const splitHere = (direction: "row" | "column") => {
     closeMenu();
-    if (!profile) return;
-    useAppStore.getState().openProfileInSplit(tabId, profile, direction);
+    const source = pane.localShell ?? profile;
+    if (source) useAppStore.getState().openProfileInSplit(tabId, source, direction);
   };
 
   const askAi = () => {
@@ -841,8 +865,8 @@ export function TerminalPane({ tabId, pane, active }: Props) {
       onMouseDown={activatePane}
     >
       <div className="pane-head">
-        <span className={`proto-tag ${profile?.protocol ?? "ssh"}`}>
-          {profile?.protocol === "rdp"
+        <span className={`proto-tag ${profile?.protocol ?? (isLocal ? "local" : "ssh")}`}>
+          {isLocal ? "本地" : profile?.protocol === "rdp"
             ? "RDP"
             : profile?.protocol === "serial"
               ? "SER"
@@ -896,7 +920,7 @@ export function TerminalPane({ tabId, pane, active }: Props) {
           <button className="pane-tool" title="垂直切分" onClick={() => splitHere("column")}>
             <Icon name="panel" size={12} />
           </button>
-          <button className="pane-tool" title="重新连接" onClick={() => reconnectRef.current()}>
+          <button className="pane-tool" title={isLocal ? "重启终端" : "重新连接"} onClick={() => reconnectRef.current()}>
             <Icon name="refresh" size={12} />
           </button>
         </span>
@@ -991,8 +1015,8 @@ export function TerminalPane({ tabId, pane, active }: Props) {
           </button>
         </div>
       )}
-      {isSsh && <span className="ghost-text" ref={ghostRef} />}
-      {isSsh && completions.length > 0 && completionPos && (
+      {hasShell && <span className="ghost-text" ref={ghostRef} style={{ fontFamily: liveTerminal.font_family }} />}
+      {hasShell && completions.length > 0 && completionPos && (
         <div
           className={`cmd-pop${completionPos.above ? " is-above" : ""}`}
           style={{ left: completionPos.left, top: completionPos.top }}
@@ -1017,6 +1041,7 @@ export function TerminalPane({ tabId, pane, active }: Props) {
               </span>
             </div>
           ))}
+          <div className="cmd-keys">↑/↓ 选择 · Tab 接受 · Esc 关闭</div>
         </div>
       )}
       {authPrompt && (
@@ -1082,16 +1107,29 @@ export function TerminalPane({ tabId, pane, active }: Props) {
             <div className="ov-title">
               {pane.status === "connecting" ? "正在连接" : pane.status === "error" ? "连接失败" : "会话已断开"}
             </div>
-            <div className="ov-desc">{pane.statusText}</div>
-            {pane.status !== "connecting" && (
-              <div className="ov-actions">
-                <button className="btn-ghost sm" onClick={() => closePane(tabId, pane.key)}>
-                  关闭面板
-                </button>
-              </div>
+            {profile?.protocol === "ssh" && (pane.status === "connecting" || pane.status === "error") && (
+              <ol className="ssh-progress" aria-label="SSH 连接进度">
+                {["连接服务器", "校验主机指纹", "验证登录凭据", "打开终端"].map((label, index) => (
+                  <li key={label} data-step={index < sshStage ? "done" : index === sshStage ? pane.status : "pending"}>
+                    {label}
+                  </li>
+                ))}
+              </ol>
             )}
+            <div className="ov-desc" role="status">{pane.statusText}</div>
+            <div className="ov-actions">
+              <button className="btn-ghost sm" onClick={() => closePane(tabId, pane.key)}>
+                {pane.status === "connecting" ? "取消" : "关闭面板"}
+              </button>
+              {pane.status === "error" && (
+                <button className="btn-primary sm" onClick={() => reconnectRef.current()}>重试</button>
+              )}
+            </div>
           </div>
         </div>
+      )}
+      {hostKeyPrompt && (
+        <HostKeyDialog key={hostKeyPrompt.prompt_id} prompt={hostKeyPrompt} onDone={() => setHostKeyPrompt(null)} />
       )}
     </div>
   );

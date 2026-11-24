@@ -8,6 +8,8 @@ interface Props {
   sessionId: string | null;
   paneReady: boolean;
   onClose: () => void;
+  enabled?: boolean;
+  onEnable?: () => void;
 }
 
 const HISTORY_POINTS = 40;
@@ -106,7 +108,7 @@ function CpuSpark({ values }: { values: number[] }) {
 }
 
 /** 服务器监控面板：复用当前 SSH 会话只读采样，面板关闭即停止。 */
-export function MonitorPanel({ profile, sessionId, paneReady, onClose }: Props) {
+export function MonitorPanel({ profile, sessionId, paneReady, onClose, enabled = true, onEnable }: Props) {
   const [metrics, setMetrics] = useState<HostMetrics | null>(null);
   const [history, setHistory] = useState<number[]>([]);
   const [error, setError] = useState<{ code: string; message: string } | null>(null);
@@ -117,7 +119,7 @@ export function MonitorPanel({ profile, sessionId, paneReady, onClose }: Props) 
   const ready = profile?.protocol === "ssh" && Boolean(sessionId) && paneReady;
 
   useEffect(() => {
-    if (!ready || !sessionId) return;
+    if (!ready || !sessionId || !enabled) return;
     const current = (generation.current += 1);
     setMetrics(null);
     setHistory([]);
@@ -145,7 +147,7 @@ export function MonitorPanel({ profile, sessionId, paneReady, onClose }: Props) 
       generation.current += 1;
       void monitorStop(sessionId).catch(() => undefined);
     };
-  }, [ready, sessionId, reload]);
+  }, [enabled, ready, sessionId, reload]);
 
   const usage = metrics?.cpu.usage ?? 0;
   const memRatio = metrics && metrics.mem.total > 0 ? metrics.mem.used / metrics.mem.total : 0;
@@ -165,6 +167,8 @@ export function MonitorPanel({ profile, sessionId, paneReady, onClose }: Props) 
               ? "需要 SSH 会话"
               : !ready
                 ? "SSH 会话未就绪"
+                : !enabled
+                  ? "尚未开启"
                 : metrics
                   ? `Linux · ${fmtClock(metrics.ts)}`
                   : error
@@ -176,7 +180,7 @@ export function MonitorPanel({ profile, sessionId, paneReady, onClose }: Props) 
           className="icon-btn"
           title="重新采样"
           onClick={() => setReload((value) => value + 1)}
-          disabled={!ready}
+          disabled={!ready || !enabled}
         >
           <Icon name="refresh" size={14} />
         </button>
@@ -186,7 +190,14 @@ export function MonitorPanel({ profile, sessionId, paneReady, onClose }: Props) 
       </header>
 
       <div className="monitor-body">
-        {!profile || profile.protocol !== "ssh" ? (
+        {ready && !enabled ? (
+          <div className="mon-empty">
+            <Icon name="pulse" size={22} />
+            <div className="mon-empty-title">开启服务器监控</div>
+            <div className="mon-empty-desc">通过当前 SSH 会话读取 CPU、内存和磁盘信息。</div>
+            <button className="btn-primary sm" onClick={onEnable}>开启</button>
+          </div>
+        ) : !profile || profile.protocol !== "ssh" ? (
           <div className="mon-empty">
             <Icon name="pulse" size={22} />
             <div className="mon-empty-title">请先连接一个 Linux SSH 会话</div>

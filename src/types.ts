@@ -1,5 +1,7 @@
 // 与 Rust 侧 serde 模型保持一致的类型定义。
 
+export type LocalShell = "system" | "power_shell" | "cmd";
+
 export type Protocol = "ssh" | "rdp" | "serial" | "telnet" | "tunnel" | "vnc";
 export type SecretKind = "password" | "private_key" | "passphrase" | "token";
 
@@ -234,7 +236,7 @@ export interface SecretRef {
 }
 
 export interface SessionState {
-  state: "connecting" | "authenticating" | "ready" | "closed";
+  state: "connecting" | "verifying_host" | "authenticating" | "opening_shell" | "ready" | "closed";
   reason?: string;
 }
 
@@ -243,7 +245,19 @@ export interface AuthPromptItem {
   echo: boolean;
 }
 
+export interface HostKeyPrompt {
+  type: "host_key_prompt";
+  prompt_id: string;
+  host: string;
+  port: number;
+  algorithm: string;
+  fingerprint: string;
+}
+
+export type HostKeyDecision = "once" | "save" | "cancel";
+
 export type TermEvent =
+  | HostKeyPrompt
   | { type: "state"; state: SessionState }
   | { type: "data"; seq: number; text: string }
   | { type: "title"; title: string }

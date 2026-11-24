@@ -10,11 +10,11 @@ import type {
 
 export const DEFAULT_TERMINAL: TerminalUiSettings = {
   font_family:
-    '"Ubuntu", "Menlo", "Monaco", "Consolas", "Courier New", "Noto Sans Mono CJK SC", monospace',
+    '"Cascadia Mono", "Consolas", "Menlo", "Monaco", "Ubuntu Mono", "DejaVu Sans Mono", "Noto Sans Mono CJK SC", monospace',
   normal_weight: "normal",
   bold_weight: "bold",
   scrollback: 3000,
-  font_size: 16,
+  font_size: 14,
   line_height: 1.0,
   letter_spacing: 0,
   cursor_blink: true,
@@ -82,6 +82,10 @@ export const useUiSettingsStore = create<UiSettingsStore>()((set, get) => ({
     if (!loadPromise) {
       loadPromise = uiSettingsGet()
         .then((settings) => {
+          const terminal = settings.terminal;
+          if (terminal.font_family === '"Ubuntu", "Menlo", "Monaco", "Consolas", "Courier New", "Noto Sans Mono CJK SC", monospace') {
+            terminal.font_family = DEFAULT_TERMINAL.font_family;
+          }
           set({ settings, loaded: true, error: null });
         })
         .catch(() => {

@@ -36,6 +36,7 @@ pub async fn ssh_test_connection(
     state: State<'_, AppState>,
     mut profile: Profile,
     secrets: SshTestSecrets,
+    on_event: TauriChannel<TermEvent>,
 ) -> AppResult<String> {
     if !matches!(profile.protocol, Protocol::Ssh) {
         return Err(AppError::new("ssh.unsupported", "测试连接仅支持 SSH 配置"));
@@ -115,7 +116,17 @@ pub async fn ssh_test_connection(
         }
         AuthRef::None => {}
     }
-    let result = connect_profile(&profile, &temp_vault, state.known_hosts.clone(), None).await;
+    let auth_ui = crate::transport::ssh::AuthUi {
+        prompts: &state.ssh.auth_prompts,
+        on_event: &on_event,
+    };
+    let result = connect_profile(
+        &profile,
+        &temp_vault,
+        state.known_hosts.clone(),
+        Some(auth_ui),
+    )
+    .await;
     let _ = std::fs::remove_dir_all(&temp_dir);
     match result {
         Ok(connected) => {
@@ -161,11 +172,34 @@ pub async fn term_open(
 }
 
 #[tauri::command]
+pub async fn local_term_open(
+    state: State<'_, AppState>,
+    shell: crate::session::local::LocalShell,
+    cols: u16,
+    rows: u16,
+    on_event: TauriChannel<TermEvent>,
+) -> AppResult<SessionId> {
+    let manager = state.local.clone();
+    tokio::task::spawn_blocking(move || manager.open(shell, cols, rows, on_event))
+        .await
+        .map_err(AppError::internal)?
+        .map_err(|error| AppError::new("local.open_failed", error.to_string()))
+}
+
+#[tauri::command]
 pub async fn term_input(
     state: State<'_, AppState>,
     session: SessionId,
     bytes: Vec<u8>,
+    local: Option<bool>,
 ) -> AppResult<()> {
+    if local == Some(true) {
+        return state
+            .local
+            .write(session, bytes)
+            .await
+            .map_err(AppError::internal);
+    }
     state.ssh.write(session, bytes).await
 }
 
@@ -175,16 +209,56 @@ pub async fn term_resize(
     session: SessionId,
     cols: u16,
     rows: u16,
+    local: Option<bool>,
 ) -> AppResult<()> {
     if cols == 0 || rows == 0 {
         return Ok(());
+    }
+    if local == Some(true) {
+        return state
+            .local
+            .resize(session, cols, rows)
+            .await
+            .map_err(AppError::internal);
     }
     state.ssh.resize(session, cols, rows).await
 }
 
 #[tauri::command]
-pub async fn term_close(state: State<'_, AppState>, session: SessionId) -> AppResult<()> {
+pub async fn term_close(
+    state: State<'_, AppState>,
+    session: SessionId,
+    local: Option<bool>,
+) -> AppResult<()> {
+    if local == Some(true) {
+        let manager = state.local.clone();
+        return tokio::task::spawn_blocking(move || manager.close(session))
+            .await
+            .map_err(AppError::internal)?
+            .map_err(AppError::internal);
+    }
     state.ssh.close(session).await
+}
+
+#[tauri::command]
+pub async fn term_host_key_respond(
+    state: State<'_, AppState>,
+    prompt_id: Uuid,
+    decision: crate::transport::ssh::HostKeyDecision,
+) -> AppResult<()> {
+    if state
+        .ssh
+        .auth_prompts
+        .respond_host_key(prompt_id, decision)
+        .await
+    {
+        Ok(())
+    } else {
+        Err(AppError::new(
+            "ssh.prompt_expired",
+            "主机指纹提示已失效，请重新连接",
+        ))
+    }
 }
 
 /// 键盘交互认证：提交用户输入；responses 为 None 表示用户取消。
@@ -530,7 +604,21 @@ pub async fn vault_delete(state: State<'_, AppState>, id: Uuid) -> AppResult<()>
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn sftp_open(state: State<'_, AppState>, profile_id: Uuid) -> AppResult<SftpOpenResp> {
+pub async fn sftp_open(
+    state: State<'_, AppState>,
+    profile_id: Uuid,
+    session: Option<SessionId>,
+) -> AppResult<SftpOpenResp> {
+    if let Some(session) = session {
+        let handle = state.ssh.handle(session).await?;
+        let (sftp_id, home) = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            state.sftp.open_existing(handle),
+        )
+        .await
+        .map_err(|_| AppError::new("sftp.timeout", "SFTP 子系统初始化超时"))??;
+        return Ok(SftpOpenResp { sftp_id, home });
+    }
     let profile = state
         .profiles
         .get(&profile_id)

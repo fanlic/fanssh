@@ -6,7 +6,9 @@ import type {
   DockerContainer,
   DockerLogs,
   MonitorEvent,
+  LocalShell,
   KnownHostEntry,
+  HostKeyDecision,
   Nl2CmdResult,
   Profile,
   RemoteEntry,
@@ -36,6 +38,17 @@ export async function termOpen(
   return invoke<string>("term_open", { profileId, onEvent: channel });
 }
 
+export function localTermOpen(
+  shell: LocalShell,
+  cols: number,
+  rows: number,
+  onEvent: (event: TermEvent) => void,
+): Promise<string> {
+  const channel = new Channel<TermEvent>();
+  channel.onmessage = onEvent;
+  return invoke<string>("local_term_open", { shell, cols, rows, onEvent: channel });
+}
+
 // ---------------------------------------------------------------------------
 // Docker（复用当前 SSH 会话，经 docker.sock 转发）
 // ---------------------------------------------------------------------------
@@ -52,20 +65,24 @@ export async function dockerLogs(
   return invoke<DockerLogs>("docker_logs", { session, container, tail });
 }
 
-export function termInput(session: string, data: Uint8Array): Promise<void> {
+export function termInput(session: string, data: Uint8Array, local = false): Promise<void> {
   // Tauri 会把 Vec<u8> 反序列化为数字数组，这里显式转换。
-  return invoke("term_input", { session, bytes: Array.from(data) });
+  return invoke("term_input", { session, bytes: Array.from(data), local });
 }
 
-export function termResize(session: string, cols: number, rows: number): Promise<void> {
-  return invoke("term_resize", { session, cols, rows });
+export function termResize(session: string, cols: number, rows: number, local = false): Promise<void> {
+  return invoke("term_resize", { session, cols, rows, local });
 }
 
-export function termClose(session: string): Promise<void> {
-  return invoke("term_close", { session });
+export function termClose(session: string, local = false): Promise<void> {
+  return invoke("term_close", { session, local });
 }
 
 /** 键盘交互认证：responses 为 null 表示取消。 */
+export function termHostKeyRespond(promptId: string, decision: HostKeyDecision): Promise<void> {
+  return invoke("term_host_key_respond", { promptId, decision });
+}
+
 export function termAuthRespond(
   promptId: string,
   responses: string[] | null,
@@ -143,8 +160,11 @@ export function profileDelete(id: string): Promise<void> {
 export function sshTestConnection(
   profile: Profile,
   secrets: { password?: string | null; key_text?: string | null; passphrase?: string | null },
+  onEvent: (event: TermEvent) => void,
 ): Promise<string> {
-  return invoke("ssh_test_connection", { profile, secrets });
+  const channel = new Channel<TermEvent>();
+  channel.onmessage = onEvent;
+  return invoke("ssh_test_connection", { profile, secrets, onEvent: channel });
 }
 
 export function profileExport(path: string, passphrase: string): Promise<number> {
@@ -180,8 +200,8 @@ export function vaultDelete(id: string): Promise<void> {
 // SFTP
 // ---------------------------------------------------------------------------
 
-export function sftpOpen(profileId: string): Promise<SftpOpenResp> {
-  return invoke("sftp_open", { profileId });
+export function sftpOpen(profileId: string, session?: string): Promise<SftpOpenResp> {
+  return invoke("sftp_open", { profileId, session });
 }
 
 export function sftpList(sftpId: string, path: string): Promise<RemoteEntry[]> {

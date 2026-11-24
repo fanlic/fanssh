@@ -122,12 +122,12 @@ impl Default for TerminalSettings {
     fn default() -> Self {
         Self {
             font_family:
-                "\"Ubuntu\", \"Menlo\", \"Monaco\", \"Consolas\", \"Courier New\", \"Noto Sans Mono CJK SC\", monospace"
+                "\"Cascadia Mono\", \"Consolas\", \"Menlo\", \"Monaco\", \"Ubuntu Mono\", \"DejaVu Sans Mono\", \"Noto Sans Mono CJK SC\", monospace"
                     .to_string(),
             normal_weight: "normal".to_string(),
             bold_weight: "bold".to_string(),
             scrollback: 3000,
-            font_size: 16,
+            font_size: 14,
             line_height: 1.0,
             letter_spacing: 0.0,
             cursor_blink: true,

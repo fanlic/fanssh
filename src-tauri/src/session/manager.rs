@@ -36,7 +36,7 @@ pub struct SshManager {
     /// 活跃 SSH 连接的句柄，供 Docker 等复用同一条连接开 exec 通道。
     handles: Arc<Mutex<HashMap<SessionId, Arc<Handle<ClientHandler>>>>>,
     /// 键盘交互认证的前端应答等待队列。
-    auth_prompts: AuthPrompts,
+    pub(crate) auth_prompts: AuthPrompts,
     /// 每个会话的输出编码，用于把前端 UTF-8 输入转成目标字符集。
     encodings: Arc<Mutex<HashMap<SessionId, &'static encoding_rs::Encoding>>>,
 }
@@ -53,10 +53,6 @@ impl SshManager {
         let _ = on_event.send(TermEvent::State {
             state: SessionState::Connecting,
         });
-        let _ = on_event.send(TermEvent::State {
-            state: SessionState::Authenticating,
-        });
-
         let prefs = profile.ssh_prefs();
         let encoding = resolve_encoding(prefs.encoding.as_deref());
         let auth_ui = AuthUi {
@@ -64,7 +60,10 @@ impl SshManager {
             on_event: &on_event,
         };
         let connected = connect_profile(&profile, &vault, known_hosts, Some(auth_ui)).await?;
-        let mut channel = connected
+        let _ = on_event.send(TermEvent::State {
+            state: SessionState::OpeningShell,
+        });
+        let channel = connected
             .handle
             .channel_open_session()
             .await
@@ -480,18 +479,18 @@ fn shell_quote(value: &str) -> String {
 }
 
 /// 按会话编码增量解码远端输出。
-struct EncodingDecoder {
+pub(crate) struct EncodingDecoder {
     decoder: encoding_rs::Decoder,
 }
 
 impl EncodingDecoder {
-    fn new(encoding: &'static encoding_rs::Encoding) -> Self {
+    pub(crate) fn new(encoding: &'static encoding_rs::Encoding) -> Self {
         Self {
             decoder: encoding.new_decoder_without_bom_handling(),
         }
     }
 
-    fn push(&mut self, chunk: &[u8]) -> Option<String> {
+    pub(crate) fn push(&mut self, chunk: &[u8]) -> Option<String> {
         let capacity = self.decoder.max_utf8_buffer_length(chunk.len())?;
         let mut out = String::with_capacity(capacity);
         let (result, _, _) = self.decoder.decode_to_string(chunk, &mut out, false);
@@ -503,7 +502,7 @@ impl EncodingDecoder {
         }
     }
 
-    fn finish(&mut self) -> Option<String> {
+    pub(crate) fn finish(&mut self) -> Option<String> {
         let capacity = self.decoder.max_utf8_buffer_length(0)?;
         let mut out = String::with_capacity(capacity);
         let _ = self.decoder.decode_to_string(&[], &mut out, true);

@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useAppStore } from "../store";
-import type { Profile } from "../types";
+import type { LocalShell, Profile } from "../types";
 import { Icon } from "./Icon";
 
 interface Props {
+  onActivate: () => void;
+  onOpenLocal: (shell: LocalShell) => void;
+  platform: string;
+  onToggleSftp: () => void;
   onSplit: () => void;
   onOpenSearch: () => void;
   onNew: () => void;
@@ -11,17 +15,20 @@ interface Props {
   onConnectProfile: (profile: Profile) => void;
 }
 
-export function TabBar({ onSplit, onOpenSearch, onNew, onManage, onConnectProfile }: Props) {
+export function TabBar({ onActivate, onOpenLocal, platform, onToggleSftp, onSplit, onOpenSearch, onNew, onManage, onConnectProfile }: Props) {
   const tabs = useAppStore((s) => s.tabs);
   const activeTabId = useAppStore((s) => s.activeTabId);
   const profiles = useAppStore((s) => s.profiles);
   const recentProfileIds = useAppStore((s) => s.recentProfileIds);
   const setActiveTab = useAppStore((s) => s.setActiveTab);
+  const activateTab = (id: string) => {
+    setActiveTab(id);
+    onActivate();
+  };
   const closeTab = useAppStore((s) => s.closeTab);
   const closePane = useAppStore((s) => s.closePane);
   const moveTab = useAppStore((s) => s.moveTab);
   const removeRecent = useAppStore((s) => s.removeRecent);
-  const setSftpProfileId = useAppStore((s) => s.setSftpProfileId);
   const [menuOpen, setMenuOpen] = useState(false);
   const [leftOpen, setLeftOpen] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -93,6 +100,24 @@ export function TabBar({ onSplit, onOpenSearch, onNew, onManage, onConnectProfil
 
             <div className="menu-sep" />
             <div className="menu-label">打开控制台</div>
+            {(platform === "windows"
+              ? ([["system", "系统默认控制台"], ["power_shell", "PowerShell"], ["cmd", "CMD"]] as const)
+              : ([["system", "系统默认控制台"]] as const)
+            ).map(([shell, label]) => (
+              <button
+                key={shell}
+                className="menu-item"
+                onClick={() => {
+                  setLeftOpen(false);
+                  onOpenLocal(shell);
+                }}
+              >
+                <Icon name="term" size={12} />
+                <span className="mi-name">{label}</span>
+              </button>
+            ))}
+            <div className="menu-sep" />
+            <div className="menu-label">已打开的会话</div>
             {tabs.length === 0 && <div className="menu-empty">暂无打开的会话</div>}
             {tabs.map((tab) => {
               const pane = tab.panes[tab.activePane] ?? tab.panes[0];
@@ -101,7 +126,7 @@ export function TabBar({ onSplit, onOpenSearch, onNew, onManage, onConnectProfil
                   key={tab.id}
                   className={`menu-item menu-row${tab.id === activeTabId ? " is-active" : ""}`}
                   onClick={() => {
-                    setActiveTab(tab.id);
+                    activateTab(tab.id);
                     setLeftOpen(false);
                   }}
                 >
@@ -173,7 +198,7 @@ export function TabBar({ onSplit, onOpenSearch, onNew, onManage, onConnectProfil
               className={`tab${tab.id === activeTabId ? " is-active" : ""}${
                 dragId === tab.id ? " is-dragging" : ""
               }${overId === tab.id && dragId !== tab.id ? " is-drop-target" : ""}`}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => activateTab(tab.id)}
               title={tab.title}
               draggable
               onDragStart={(event) => {
@@ -216,6 +241,9 @@ export function TabBar({ onSplit, onOpenSearch, onNew, onManage, onConnectProfil
             </div>
           );
         })}
+        <button className="tab-menu-btn" title="新建本地终端标签" onClick={() => onOpenLocal("system")}>
+          <Icon name="plus" size={14} />
+        </button>
       </div>
 
       {activeTab && (
@@ -242,7 +270,7 @@ export function TabBar({ onSplit, onOpenSearch, onNew, onManage, onConnectProfil
             <button
               className="icon-btn sm"
               title="SFTP 文件传输"
-              onClick={() => setSftpProfileId(activeProfile.id)}
+              onClick={onToggleSftp}
             >
               <Icon name="transfer" size={14} />
             </button>
@@ -263,7 +291,7 @@ export function TabBar({ onSplit, onOpenSearch, onNew, onManage, onConnectProfil
                     key={tab.id}
                     className={`menu-item${tab.id === activeTabId ? " is-active" : ""}`}
                     onClick={() => {
-                      setActiveTab(tab.id);
+                      activateTab(tab.id);
                       setMenuOpen(false);
                     }}
                   >

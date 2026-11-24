@@ -18,6 +18,7 @@ import { TerminalPane } from "./components/TerminalPane";
 import { TunnelDialog } from "./components/TunnelDialog";
 import { VncPane } from "./components/VncPane";
 import { applyAppearance } from "./lib/appearance";
+import { matchesProfile } from "./lib/profileSearch";
 import { useAppStore } from "./store";
 import { useUiSettingsStore } from "./uiSettings";
 import type { DockerContainer, Profile, Protocol } from "./types";
@@ -59,9 +60,14 @@ export default function App() {
   const [editing, setEditing] = useState<Profile | null>(null);
   const [proto, setProto] = useState<Protocol>("ssh");
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [assetView, setAssetView] = useState(true);
+  const [assetTreeOpen, setAssetTreeOpen] = useState(true);
+  const [assetFilter, setAssetFilter] = useState<"all" | "favorites" | "recent">("all");
+  const favorites = useAppStore((s) => s.favoriteProfileIds);
+  const recent = useAppStore((s) => s.recentProfileIds);
+  const toggleFavorite = useAppStore((s) => s.toggleFavorite);
   const [dockerOpen, setDockerOpen] = useState(false);
-  const [monitorOpen, setMonitorOpen] = useState(false);
+  const updatePaneTools = useAppStore((s) => s.updatePaneTools);
   const [query, setQuery] = useState("");
   const [version, setVersion] = useState("1.0.6");
   const [platform, setPlatform] = useState("windows");
@@ -71,7 +77,7 @@ export default function App() {
   const stageRef = useRef<HTMLDivElement>(null);
   const quickSearchRef = useRef<HTMLInputElement>(null);
   const focusConnectionSearch = () => {
-    setSidebarOpen(true);
+    setAssetView(true);
     requestAnimationFrame(() => {
       quickSearchRef.current?.focus();
       quickSearchRef.current?.select();
@@ -180,7 +186,7 @@ export default function App() {
             window.dispatchEvent(new CustomEvent("fanssh:zoom", { detail: -1 }));
             break;
           case "toggle_sidebar":
-            setSidebarOpen((value) => !value);
+            setAssetView((value) => !value || !useAppStore.getState().activeTabId);
             break;
         }
         return;
@@ -201,8 +207,10 @@ export default function App() {
         const tab = state.tabs.find((item) => item.id === state.activeTabId);
         const pane = tab?.panes[tab.activePane];
         const profile = state.profiles.find((item) => item.id === pane?.profileId);
-        if (profile?.protocol === "ssh") {
-          state.setSftpProfileId(state.sftpProfileId === profile.id ? null : profile.id);
+        if (tab && pane && profile?.protocol === "ssh") {
+          state.updatePaneTools(tab.id, pane.key, { sftpHidden: !pane.sftpHidden });
+          setDockerOpen(false);
+          setAssetView(false);
         }
       } else if (key === "j" && event.shiftKey) {
         event.preventDefault();
@@ -216,9 +224,17 @@ export default function App() {
   }, [toggleAi]);
 
   useEffect(() => {
-    setSidebarOpen(!activeTabId);
+    setAssetView(!activeTabId);
   }, [activeTabId]);
 
+  const keyword = query.trim().toLowerCase();
+  const protocolProfiles = profiles.filter((profile) => profile.protocol === proto);
+  const favoritesCount = protocolProfiles.filter((profile) => favorites.includes(profile.id)).length;
+  const recentCount = protocolProfiles.filter((profile) => recent.includes(profile.id)).length;
+  const matchingProfiles = protocolProfiles.filter((profile) => matchesProfile(profile, keyword));
+  const visibleProfiles = assetFilter === "recent"
+    ? recent.flatMap((id) => matchingProfiles.filter((profile) => profile.id === id))
+    : matchingProfiles.filter((profile) => assetFilter !== "favorites" || favorites.includes(profile.id));
   const activeTab = tabs.find((tab) => tab.id === activeTabId);
   const activePane = activeTab?.panes[activeTab.activePane] ?? null;
   const sftpProfile = useMemo(
@@ -229,6 +245,10 @@ export default function App() {
     () => profiles.find((profile) => profile.id === activePane?.profileId) ?? null,
     [profiles, activePane],
   );
+
+  const isSshSession = activeProfile?.protocol === "ssh" && !!activePane;
+  const sftpOpen = isSshSession && !activePane.sftpHidden && !dockerOpen;
+  const monitorOpen = isSshSession && !activePane.monitorHidden;
 
   const notify = (message: string, kind: "info" | "error" = "info") => setNotice({ message, kind });
   const protoLabel =
@@ -260,12 +280,21 @@ export default function App() {
     openProfileTab(profile);
   };
 
+  const connectAsset = (profile: Profile) => {
+    if (profile.protocol === "tunnel") setTunnelProfile(profile);
+    else openProfileTab(profile);
+  };
+
   const handleSplit = () => {
     if (!activeTab) {
       notify("先打开一个终端会话再分屏", "error");
       return;
     }
     const pane = activeTab.panes[activeTab.activePane];
+    if (pane?.localShell) {
+      openProfileInSplit(activeTab.id, pane.localShell);
+      return;
+    }
     const profile = profiles.find((item) => item.id === pane?.profileId);
     if (!profile) {
       notify("找不到当前面板对应的服务器配置", "error");
@@ -351,16 +380,14 @@ export default function App() {
   };
 
   const handleSftpToggle = () => {
-    if (sftpProfileId) {
-      setSftpProfileId(null);
+    if (!activeTab || !activePane || !isSshSession) {
+      if (sftpProfileId) setSftpProfileId(null);
+      else notify("先打开一个 SSH 会话再使用 SFTP", "error");
       return;
     }
-    if (!activeProfile || activeProfile.protocol !== "ssh") {
-      notify("先打开一个 SSH 会话再使用 SFTP", "error");
-      return;
-    }
+    updatePaneTools(activeTab.id, activePane.key, { sftpHidden: assetView ? false : sftpOpen });
     setDockerOpen(false);
-    setSftpProfileId(activeProfile.id);
+    setAssetView(false);
   };
 
   const handleDockerToggle = () => {
@@ -368,12 +395,18 @@ export default function App() {
       setDockerOpen(false);
       return;
     }
-    setSftpProfileId(null);
+    if (!isSshSession) {
+      notify("先打开一个 SSH 会话再使用 Docker", "error");
+      return;
+    }
+    setAssetView(false);
     setDockerOpen(true);
   };
 
   const handleMonitorToggle = () => {
-    setMonitorOpen((value) => !value);
+    if (activeTab && activePane && isSshSession) {
+      updatePaneTools(activeTab.id, activePane.key, { monitorHidden: monitorOpen });
+    }
   };
 
   /** 进入容器：新开 SSH 终端 Tab，把命令写进输入行但不回车。 */
@@ -450,13 +483,16 @@ export default function App() {
   };
 
   return (
-    <div className={`app-shell${!sidebarOpen && tabs.length > 0 ? " is-terminal-view" : ""}`}>
+    <div className={`app-shell${!assetView && tabs.length > 0 ? " is-terminal-view" : ""}`}>
       <header className="titlebar">
         <div className="tb-icons">
+          <button className="tb-slot" title="打开本地终端" onClick={() => openProfileTab("system")}>
+            <Icon name="term" size={14} />
+          </button>
           <button
-            className={`tb-slot${sidebarOpen ? " is-active" : ""}`}
-            title={sidebarOpen ? "收起资产管理 (Ctrl Shift B)" : "打开资产管理 (Ctrl Shift B)"}
-            onClick={() => setSidebarOpen((value) => !value)}
+            className={`tb-slot${assetView ? " is-active" : ""}`}
+            title="资产管理 (Ctrl Shift B)"
+            onClick={() => setAssetView(true)}
           >
             <Icon name="link" size={14} />
           </button>
@@ -464,8 +500,8 @@ export default function App() {
             <Icon name="plus" size={14} />
           </button>
           <button
-            className={`tb-slot${sftpProfileId ? " is-active" : ""}`}
-            title={sftpProfileId ? "关闭 SFTP (Ctrl Shift S)" : "打开 SFTP (Ctrl Shift S)"}
+            className={`tb-slot${(assetView ? sftpProfileId : sftpOpen) ? " is-active" : ""}`}
+            title={(assetView ? sftpProfileId : sftpOpen) ? "关闭 SFTP (Ctrl Shift S)" : "打开 SFTP (Ctrl Shift S)"}
             onClick={handleSftpToggle}
           >
             <Icon name="transfer" size={14} />
@@ -478,6 +514,20 @@ export default function App() {
             <Icon name="docker" size={14} />
           </button>
         </div>
+        <TabBar
+          onActivate={() => setAssetView(false)}
+          onOpenLocal={openProfileTab}
+          platform={platform}
+          onSplit={handleSplit}
+          onToggleSftp={handleSftpToggle}
+          onOpenSearch={focusConnectionSearch}
+          onNew={handleNew}
+          onManage={() => {
+            setAssetView(true);
+            setQuery("");
+          }}
+          onConnectProfile={connectAsset}
+        />
         <div className="tb-right">
           <button className="tb-slot" title="搜索连接 (Ctrl Shift F)" onClick={focusConnectionSearch}>
             <Icon name="search" size={14} />
@@ -491,7 +541,7 @@ export default function App() {
 
       <div className="protobar">
         <div className="proto-tabs" role="tablist">
-          {(["ssh", "serial", "rdp", "telnet", "vnc", "tunnel"] as Protocol[]).map((item) => (
+          {(["ssh", "rdp", "telnet", "tunnel", "vnc", "serial"] as Protocol[]).map((item) => (
             <button
               key={item}
               role="tab"
@@ -499,7 +549,7 @@ export default function App() {
               className={`proto-tab${proto === item ? " is-active" : ""}`}
               onClick={() => {
                 setProto(item);
-                setSidebarOpen(true);
+                setAssetView(true);
               }}
             >
               {item === "ssh"
@@ -528,10 +578,10 @@ export default function App() {
       </div>
 
       <div className="app-body">
-        {sidebarOpen && (
+        {assetView && assetTreeOpen && (
           <SessionSidebar
             proto={proto}
-            onCollapse={() => setSidebarOpen(false)}
+            onCollapse={() => setAssetTreeOpen(false)}
             onNew={handleNew}
             onEdit={handleEdit}
             onImport={handleImport}
@@ -541,13 +591,29 @@ export default function App() {
             onNotice={notify}
             query={query}
             onClearSearch={() => setQuery("")}
+            filter={assetFilter}
+            onFilterChange={setAssetFilter}
+            favoritesCount={favoritesCount}
+            recentCount={recentCount}
+          />
+        )}
+
+        {assetView && sftpProfile && (
+          <SftpPanel
+            key={sftpProfile.id}
+            profileId={sftpProfile.id}
+            profileName={sftpProfile.name}
+            onClose={() => setSftpProfileId(null)}
           />
         )}
 
         <main className="workspace">
-          {sidebarOpen && (
+          {assetView && (
             <div className="connection-toolbar">
-              <span>全部</span>
+              {!assetTreeOpen && (
+                <button className="btn-ghost sm" onClick={() => setAssetTreeOpen(true)}>展开目录</button>
+              )}
+              <span>{assetFilter === "favorites" ? "收藏" : assetFilter === "recent" ? "最近" : "全部"}</span>
               <div className="tb-quick">
                 <Icon name="search" size={13} />
                 <input
@@ -570,31 +636,95 @@ export default function App() {
                   <kbd>Ctrl Shift F</kbd>
                 )}
               </div>
+              <div className="spacer" />
+              <button className="icon-btn sm" title="刷新连接" onClick={() => void loadProfiles()}>
+                <Icon name="refresh" size={14} />
+              </button>
+              <button className="btn-primary sm" title={`新建 ${protoLabel} 连接`} onClick={handleNew}>
+                <Icon name="plus" size={14} />
+              </button>
             </div>
           )}
-          <TabBar
-            onSplit={handleSplit}
-            onOpenSearch={focusConnectionSearch}
-            onNew={handleNew}
-            onManage={() => {
-              setSidebarOpen(true);
-              setQuery("");
-            }}
-            onConnectProfile={(profile) => {
-              if (profile.protocol === "rdp") void handleRdp(profile);
-              else if (profile.protocol === "tunnel") setTunnelProfile(profile);
-              else openProfileTab(profile);
-            }}
-          />
+          {assetView && (
+            <section className="asset-list" aria-label={`${protoLabel} 连接`}>
+              {visibleProfiles.length > 0 && (
+                <table className="asset-table">
+                  <thead>
+                    <tr>
+                      <th className="asset-star" aria-label="收藏" />
+                      <th>名称</th>
+                      <th>地址</th>
+                      <th>分组</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleProfiles.map((profile) => (
+                      <tr key={profile.id} onDoubleClick={() => connectAsset(profile)}>
+                        <td className="asset-star" onDoubleClick={(event) => event.stopPropagation()}>
+                          <button
+                            className="icon-btn sm"
+                            aria-pressed={favorites.includes(profile.id)}
+                            aria-label={favorites.includes(profile.id) ? "取消收藏" : "收藏连接"}
+                            onClick={() => toggleFavorite(profile.id)}
+                          >
+                            <Icon name="star" size={14} />
+                          </button>
+                        </td>
+                        <td>{profile.name}</td>
+                        <td>{profile.protocol === "serial"
+                          ? profile.options.serial?.port
+                          : profile.protocol === "tunnel"
+                            ? `${profile.options.tunnel?.routes.length ?? 0} 条路由`
+                            : `${profile.target.host}:${profile.target.port}`}</td>
+                        <td>{profile.group || "未分组"}</td>
+                        <td>
+                          <div className="asset-actions" onDoubleClick={(event) => event.stopPropagation()}>
+                            <button className="btn-primary sm" onClick={() => connectAsset(profile)}>
+                              {profile.protocol === "tunnel" ? "打开" : "连接"}
+                            </button>
+                            <button className="btn-ghost sm" onClick={() => handleEdit(profile)}>编辑</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              {visibleProfiles.length === 0 && (
+                <div className="stage-empty">
+                  <div className="se-card">
+                    <span className="se-logo"><Icon name="term" size={40} /></span>
+                    <h2>{keyword ? "没有匹配的连接" : assetFilter === "favorites"
+                      ? "暂无收藏" : assetFilter === "recent" ? "暂无最近连接" : `暂无${protoLabel}连接`}</h2>
+                    {assetFilter === "all" && !keyword && (
+                      <div className="se-actions">
+                        <button className="btn-primary" onClick={handleNew}>+ 新建{protoLabel}连接</button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
 
-          <div className="workspace-body">
-            {sftpProfile && (
-              <SftpPanel
-                profileId={sftpProfile.id}
-                profileName={sftpProfile.name}
-                onClose={() => setSftpProfileId(null)}
-              />
-            )}
+          <div className={`workspace-body${assetView ? " is-hidden" : ""}`}>
+            {tabs.flatMap((tab) => tab.panes.map((pane) => {
+              const profile = profiles.find((item) => item.id === pane.profileId);
+              if (profile?.protocol !== "ssh" || pane.sftpHidden || pane.status !== "ready" || !pane.sessionId) {
+                return null;
+              }
+              return (
+                <div className="session-sftp" key={pane.sessionId} hidden={!sftpOpen || pane !== activePane}>
+                  <SftpPanel
+                    profileId={profile.id}
+                    profileName={profile.name}
+                    sessionId={pane.sessionId}
+                    onClose={() => updatePaneTools(tab.id, pane.key, { sftpHidden: true })}
+                  />
+                </div>
+              );
+            }))}
 
             {dockerOpen && (
               <DockerPanel
@@ -628,19 +758,19 @@ export default function App() {
                           <VncPane
                             tabId={tab.id}
                             pane={pane}
-                            active={tab.id === activeTabId && index === tab.activePane}
+                            active={!assetView && tab.id === activeTabId && index === tab.activePane}
                           />
                         ) : paneProfile?.protocol === "rdp" ? (
                           <RdpPane
                             tabId={tab.id}
                             pane={pane}
-                            active={tab.id === activeTabId && index === tab.activePane}
+                            active={!assetView && tab.id === activeTabId && index === tab.activePane}
                           />
                         ) : (
                           <TerminalPane
                             tabId={tab.id}
                             pane={pane}
-                            active={tab.id === activeTabId && index === tab.activePane}
+                            active={!assetView && tab.id === activeTabId && index === tab.activePane}
                           />
                         );
                       return (
@@ -668,22 +798,7 @@ export default function App() {
                     })}
                   </div>
                 ))}
-                {tabs.length === 0 && (
-                  <div className="stage-empty">
-                    <div className="se-card">
-                      <span className="se-logo">
-                        <Icon name="term" size={40} />
-                      </span>
-                      <h2>暂无{protoLabel}连接</h2>
-                      <p>通过下方「+ {protoLabel}」按钮添加首个连接。</p>
-                      <div className="se-actions">
-                        <button className="btn-primary" onClick={handleNew}>
-                          + 新建{protoLabel}连接
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
+
               </div>
               {dropZone && (
                 <div className={`drop-zone zone-${dropZone}`}>
@@ -703,14 +818,20 @@ export default function App() {
                   activeProfile?.protocol === "ssh" ? (activePane?.sessionId ?? null) : null
                 }
                 paneReady={activePane?.status === "ready"}
-                onClose={() => setMonitorOpen(false)}
+                enabled={activePane?.monitorEnabled ?? false}
+                onEnable={() => {
+                  if (activeTab && activePane) {
+                    updatePaneTools(activeTab.id, activePane.key, { monitorEnabled: true });
+                  }
+                }}
+                onClose={handleMonitorToggle}
               />
             )}
           </div>
         </main>
 
         <ActivityBar
-          sftpOpen={sftpProfileId !== null}
+          sftpOpen={sftpOpen}
           dockerOpen={dockerOpen}
           monitorOpen={monitorOpen}
           aiOpen={aiOpen}
@@ -720,7 +841,7 @@ export default function App() {
           onToggleAi={toggleAi}
         />
 
-        <AiSidebar collapsed={!aiOpen} />
+        <AiSidebar collapsed={assetView || !aiOpen} />
       </div>
 
       <TunnelDialog

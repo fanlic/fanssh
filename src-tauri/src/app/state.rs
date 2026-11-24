@@ -9,6 +9,7 @@ use crate::known_hosts::KnownHosts;
 use crate::monitor::MonitorManager;
 use crate::profile::ProfileStore;
 use crate::serial::SerialManager;
+use crate::session::local::LocalManager;
 use crate::session::manager::SshManager;
 use crate::transport::rdp::RdpManager;
 use crate::transport::sftp::SftpManager;
@@ -23,6 +24,7 @@ pub struct AppState {
     pub profiles: Arc<ProfileStore>,
     pub known_hosts: Arc<KnownHosts>,
     pub settings: Arc<SettingsStore>,
+    pub local: LocalManager,
     pub ssh: SshManager,
     pub serial: SerialManager,
     pub sftp: SftpManager,
@@ -53,6 +55,7 @@ impl AppState {
             profiles,
             known_hosts,
             settings,
+            local: LocalManager::default(),
             ssh: SshManager::default(),
             serial: SerialManager::default(),
             sftp: SftpManager::default(),

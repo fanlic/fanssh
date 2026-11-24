@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::ipc::dto::{RemoteEntry, SftpOpResult, SftpTextFile, TransferEvent};
 use crate::known_hosts::KnownHosts;
 use crate::session::model::Profile;
-use crate::transport::ssh::{connect_profile, ConnectedSsh};
+use crate::transport::ssh::{connect_profile, ClientHandler, ConnectedSsh};
 use crate::vault::Vault;
 
 const CHUNK: usize = 32 * 1024;
@@ -24,7 +24,7 @@ const MAX_TEXT_BYTES: u64 = 2 * 1024 * 1024;
 
 pub struct SftpEntry {
     sftp: SftpSession,
-    _conn: ConnectedSsh,
+    _conn: Option<ConnectedSsh>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -57,9 +57,22 @@ impl SftpManager {
         known_hosts: Arc<KnownHosts>,
     ) -> Result<(Uuid, String)> {
         let conn = connect_profile(profile, vault, known_hosts, None).await?;
-        let channel = conn
-            .handle
-            .channel_open_session()
+        self.open_channel(conn.handle.clone(), Some(conn)).await
+    }
+
+    pub async fn open_existing(
+        &self,
+        handle: Arc<russh::client::Handle<ClientHandler>>,
+    ) -> Result<(Uuid, String)> {
+        self.open_channel(handle, None).await
+    }
+
+    async fn open_channel(
+        &self,
+        handle: Arc<russh::client::Handle<ClientHandler>>,
+        conn: Option<ConnectedSsh>,
+    ) -> Result<(Uuid, String)> {
+        let channel = handle.channel_open_session()
             .await
             .context("打开 SFTP 通道失败")?;
         channel

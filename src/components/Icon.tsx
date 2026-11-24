@@ -3,6 +3,7 @@ import type { SVGProps } from "react";
 export type IconName =
   | "term"
   | "search"
+  | "star"
   | "plus"
   | "import"
   | "export"
@@ -48,6 +49,7 @@ const PATHS: Record<IconName, JSX.Element> = {
       <path d="M10 10l3 3" />
     </>
   ),
+  star: <path d="m8 2 1.8 3.7 4.2.6-3 3 .7 4.2L8 11.5l-3.7 2 .7-4.2-3-3 4.2-.6Z" />,
   plus: <path d="M8 3v10M3 8h10" />,
   import: <path d="M8 2v7M5 6l3 3 3-3M3 12v1.5h10V12" />,
   export: <path d="M8 10V3M5 6l3-3 3 3M3 12v1.5h10V12" />,

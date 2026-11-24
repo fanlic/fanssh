@@ -32,10 +32,12 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             term_open,
+            local_term_open,
             term_input,
             term_resize,
             term_close,
             term_auth_respond,
+            term_host_key_respond,
             ssh_test_connection,
             read_text_file,
             docker_containers,
@@ -93,6 +95,11 @@ pub fn run() {
             updater_install,
             open_external,
         ])
-        .run(tauri::generate_context!())
-        .expect("FanSSH 启动失败");
+        .build(tauri::generate_context!())
+        .expect("FanSSH 启动失败")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                app.state::<app::AppState>().local.close_all();
+            }
+        });
 }

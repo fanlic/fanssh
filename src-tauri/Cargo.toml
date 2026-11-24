@@ -1,6 +1,6 @@
 [package]
 name = "fanssh"
-version = "1.0.8-preview.5"
+version = "1.0.8-preview.6"
 description = "FanSSH - Windows terminal & operations client"
 authors = ["FanSSH"]
 edition = "2021"
@@ -50,6 +50,7 @@ ironrdp-tokio = { version = "0.12.0", features = ["reqwest-rustls-ring"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 x509-cert = { version = "0.3", default-features = false, features = ["std"] }
+portable-pty = "0.9"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

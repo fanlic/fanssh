@@ -73,46 +73,44 @@ impl KnownHosts {
         Ok(removed)
     }
 
-    pub fn verify_or_trust(
+    pub fn verify(
         &self,
         host: &str,
         port: u16,
-        algorithm: String,
-        fingerprint: String,
-    ) -> Result<()> {
+        algorithm: &str,
+        fingerprint: &str,
+        save_unknown: bool,
+    ) -> Result<bool> {
         let host = host.trim().to_ascii_lowercase();
         let key = host_key(&host, port);
         let now = now_unix();
         let mut entries = self.entries.lock().unwrap();
-        if let Some(entry) = entries.get_mut(&key) {
-            if entry.algorithm == algorithm && entry.fingerprint == fingerprint {
-                entry.last_seen = now;
-                self.persist(&entries)?;
-                return Ok(());
+        if let Some(entry) = entries.get(&key) {
+            if entry.algorithm != algorithm || entry.fingerprint != fingerprint {
+                bail!(
+                    "SSH 主机密钥已变化：{}:{}\n已记录：{} {}\n本次收到：{} {}\n已拒绝连接。确认服务器换密钥后，可在安全设置删除旧记录。",
+                    host, port, entry.algorithm, entry.fingerprint, algorithm, fingerprint
+                );
             }
-            bail!(
-                "SSH 主机密钥已变化：{}:{}\n已记录：{} {}\n本次收到：{} {}\n为避免中间人攻击，已拒绝连接。若这是服务器重装或换密钥，请到设置里的安全页面删除对应记录后重试。",
-                host,
-                port,
-                entry.algorithm,
-                entry.fingerprint,
-                algorithm,
-                fingerprint
-            );
+        } else if !save_unknown {
+            return Ok(false);
         }
 
-        entries.insert(
-            key,
-            KnownHostEntry {
+        let mut updated = entries.clone();
+        updated
+            .entry(key)
+            .and_modify(|entry| entry.last_seen = now)
+            .or_insert_with(|| KnownHostEntry {
                 host,
                 port,
-                algorithm,
-                fingerprint,
+                algorithm: algorithm.to_owned(),
+                fingerprint: fingerprint.to_owned(),
                 first_seen: now,
                 last_seen: now,
-            },
-        );
-        self.persist(&entries)
+            });
+        self.persist(&updated)?;
+        *entries = updated;
+        Ok(true)
     }
 
     fn persist(&self, entries: &HashMap<String, KnownHostEntry>) -> Result<()> {
@@ -130,4 +128,33 @@ fn host_key(host: &str, port: u16) -> String {
 
 fn sort_hosts(hosts: &mut [KnownHostEntry]) {
     hosts.sort_by(|left, right| left.host.cmp(&right.host).then(left.port.cmp(&right.port)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KnownHosts;
+
+    #[test]
+    fn unknown_keys_require_explicit_save_and_changed_keys_are_rejected() {
+        let dir =
+            std::env::temp_dir().join(format!("fanssh-host-key-test-{}", uuid::Uuid::new_v4()));
+        let store = KnownHosts::open(&dir).unwrap();
+        assert!(!store
+            .verify("example.test", 22, "ssh-ed25519", "original", false)
+            .unwrap());
+        assert!(store.list().is_empty());
+        assert!(store
+            .verify("example.test", 22, "ssh-ed25519", "original", true)
+            .unwrap());
+
+        let persisted = KnownHosts::open(&dir).unwrap();
+        assert!(persisted
+            .verify("EXAMPLE.TEST", 22, "ssh-ed25519", "original", false)
+            .unwrap());
+        assert!(persisted
+            .verify("example.test", 22, "ssh-ed25519", "changed", true)
+            .is_err());
+        assert_eq!(persisted.list()[0].fingerprint, "original");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

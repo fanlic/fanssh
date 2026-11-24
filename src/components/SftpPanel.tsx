@@ -21,6 +21,7 @@ import { Icon } from "./Icon";
 interface Props {
   profileId: string;
   profileName: string;
+  sessionId?: string;
   onClose: () => void;
 }
 
@@ -96,7 +97,7 @@ function extOf(name: string): string {
   return index > 0 ? name.slice(index) : "";
 }
 
-export function SftpPanel({ profileId, profileName, onClose }: Props) {
+export function SftpPanel({ profileId, profileName, sessionId, onClose }: Props) {
   const [sftpId, setSftpId] = useState<string | null>(null);
   const [cwd, setCwd] = useState("");
   const [homeDir, setHomeDir] = useState("");
@@ -215,7 +216,7 @@ export function SftpPanel({ profileId, profileName, onClose }: Props) {
     let disposed = false;
     (async () => {
       try {
-        const resp = await sftpOpen(profileId);
+        const resp = await sftpOpen(profileId, sessionId);
         if (disposed) {
           sftpClose(resp.sftp_id).catch(() => undefined);
           return;
@@ -234,7 +235,7 @@ export function SftpPanel({ profileId, profileName, onClose }: Props) {
       sftpRef.current = null;
       if (id) sftpClose(id).catch(() => undefined);
     };
-  }, [profileId, loadDir]);
+  }, [profileId, sessionId, loadDir]);
 
   const askConflict = (name: string, remaining: number) =>
     new Promise<{ choice: SftpConflict; remember: boolean } | null>((resolve) => {

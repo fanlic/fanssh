@@ -1,10 +1,17 @@
+import { matchesProfile } from "../lib/profileSearch";
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { errorText, profileDelete } from "../api";
 import { useAppStore } from "../store";
 import type { Profile } from "../types";
 import { Icon } from "./Icon";
 
+type AssetFilter = "all" | "favorites" | "recent";
+
 interface Props {
+  filter: AssetFilter;
+  onFilterChange: (filter: AssetFilter) => void;
+  favoritesCount: number;
+  recentCount: number;
   onNew: () => void;
   onEdit: (profile: Profile) => void;
   onImport: () => void;
@@ -49,6 +56,10 @@ export function SessionSidebar({
   onNotice,
   query,
   onClearSearch,
+  filter,
+  onFilterChange,
+  favoritesCount,
+  recentCount,
   proto,
   onCollapse,
 }: Props) {
@@ -133,38 +144,7 @@ export function SessionSidebar({
   const keyword = query.trim().toLowerCase();
   const matches = useMemo(
     () =>
-      profiles.filter((profile) => {
-        if (!keyword) return true;
-        return (
-          profile.name.toLowerCase().includes(keyword) ||
-          profile.target.host.toLowerCase().includes(keyword) ||
-          (profile.group ?? "").toLowerCase().includes(keyword) ||
-          profile.protocol.includes(keyword) ||
-          (profile.protocol === "rdp"
-            ? "rdp 远程桌面"
-            : profile.protocol === "serial"
-              ? "串口 serial"
-              : profile.protocol === "tunnel"
-                ? "隧道 tunnel 端口转发"
-                : profile.protocol === "telnet"
-                  ? "telnet 明文"
-                  : profile.protocol === "vnc"
-                    ? "vnc 远程桌面 rfb"
-                    : "ssh"
-          ).includes(keyword) ||
-          (profile.protocol === "tunnel"
-            ? `${profile.options.tunnel?.routes.length ?? 0} 条路由`
-                .toLowerCase()
-                .includes(keyword)
-            : false) ||
-          (profile.protocol === "serial"
-            ? `${profile.options.serial?.port ?? ""} ${profile.options.serial?.baud_rate ?? ""}`
-                .toLowerCase()
-                .includes(keyword)
-            : false) ||
-          profile.tags.some((tag) => tag.toLowerCase().includes(keyword))
-        );
-      }),
+      profiles.filter((profile) => matchesProfile(profile, keyword)),
     [profiles, keyword],
   );
 
@@ -288,9 +268,11 @@ export function SessionSidebar({
         {loading && <div className="sb-hint">加载中…</div>}
         {error && <div className="sb-hint err">{error}</div>}
         <div className="tree-all">
-            <Icon name="folder" size={13} />
-            <span className="tree-all-name">全部</span>
-            <span className="g-count">{visibleCount}</span>
+            <button className="asset-filter" aria-pressed={filter === "all"} onClick={() => onFilterChange("all")}>
+              <Icon name="folder" size={13} />
+              <span className="tree-all-name">全部</span>
+              <span className="g-count">{visibleCount}</span>
+            </button>
             <div className="spacer" />
             <button
               className="tree-all-gear"
@@ -300,6 +282,12 @@ export function SessionSidebar({
               <Icon name="gear" size={13} />
             </button>
           </div>
+        <button className="asset-filter asset-filter-child" aria-pressed={filter === "favorites"} onClick={() => onFilterChange("favorites")}>
+          <Icon name="star" size={13} /> 收藏 <span className="g-count">{favoritesCount}</span>
+        </button>
+        <button className="asset-filter asset-filter-child" aria-pressed={filter === "recent"} onClick={() => onFilterChange("recent")}>
+          <Icon name="clock" size={13} /> 最近 <span className="g-count">{recentCount}</span>
+        </button>
         {groups.map(([group, list]) => {
           const isCollapsed = collapsed[group] ?? false;
           return (

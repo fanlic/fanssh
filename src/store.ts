@@ -1,11 +1,15 @@
 import { create } from "zustand";
 import { profileList } from "./api";
-import type { Profile } from "./types";
+import type { LocalShell, Profile } from "./types";
 
 /** 单个分屏面板的运行时状态。 */
 export interface PaneState {
   key: string;
   profileId: string;
+  localShell?: LocalShell;
+  sftpHidden?: boolean;
+  monitorHidden?: boolean;
+  monitorEnabled?: boolean;
   profileName: string;
   sessionId: string | null;
   status: "connecting" | "ready" | "closed" | "error";
@@ -33,11 +37,12 @@ let paneSeq = 0;
 
 const AI_OPEN_KEY = "fanssh.ai-panel-open";
 const RECENT_KEY = "fanssh.recent-connections";
+const FAVORITES_KEY = "fanssh.favorite-connections";
 
 /** 最近连接的 profile id，供标签栏下拉菜单使用。 */
-function readRecent(): string[] {
+function readProfileIds(key: string): string[] {
   try {
-    const raw = window.localStorage.getItem(RECENT_KEY);
+    const raw = window.localStorage.getItem(key);
     const list = raw ? JSON.parse(raw) : [];
     return Array.isArray(list) ? list.filter((item): item is string => typeof item === "string") : [];
   } catch {
@@ -76,12 +81,17 @@ function writeAiOpen(open: boolean): void {
   }
 }
 
-function newPane(profile: Profile): PaneState {
+function newPane(source: Profile | LocalShell): PaneState {
+  const localShell = typeof source === "string" ? source : undefined;
+  const profileName = typeof source !== "string"
+    ? source.name
+    : source === "power_shell" ? "PowerShell" : source === "cmd" ? "CMD" : "本地终端";
   paneSeq += 1;
   return {
     key: `pane-${Date.now().toString(36)}-${paneSeq}`,
-    profileId: profile.id,
-    profileName: profile.name,
+    profileId: typeof source === "string" ? "" : source.id,
+    profileName,
+    localShell,
     sessionId: null,
     status: "connecting",
     statusText: "连接中…",
@@ -97,10 +107,12 @@ interface AppStore {
   sftpProfileId: string | null;
   aiOpen: boolean;
   recentProfileIds: string[];
+  favoriteProfileIds: string[];
+  toggleFavorite: (id: string) => void;
 
   loadProfiles: () => Promise<void>;
-  openProfileTab: (profile: Profile, initialInput?: string) => void;
-  openProfileInSplit: (tabId: string, profile: Profile, direction?: "row" | "column") => void;
+  openProfileTab: (profile: Profile | LocalShell, initialInput?: string) => void;
+  openProfileInSplit: (tabId: string, profile: Profile | LocalShell, direction?: "row" | "column") => void;
   closeTab: (tabId: string) => void;
   closePane: (tabId: string, paneKey: string) => void;
   moveTab: (fromId: string, toId: string) => void;
@@ -115,7 +127,12 @@ interface AppStore {
     status: PaneState["status"],
     statusText: string,
   ) => void;
-  setPaneSession: (tabId: string, paneKey: string, sessionId: string) => void;
+  setPaneSession: (tabId: string, paneKey: string, sessionId: string | null) => void;
+  updatePaneTools: (
+    tabId: string,
+    paneKey: string,
+    patch: Partial<Pick<PaneState, "sftpHidden" | "monitorHidden" | "monitorEnabled">>,
+  ) => void;
   setSftpProfileId: (id: string | null) => void;
   toggleAi: () => void;
 }
@@ -128,7 +145,18 @@ export const useAppStore = create<AppStore>()((set, get) => ({
   activeTabId: null,
   sftpProfileId: null,
   aiOpen: readAiOpen(),
-  recentProfileIds: readRecent(),
+  recentProfileIds: readProfileIds(RECENT_KEY),
+  favoriteProfileIds: readProfileIds(FAVORITES_KEY),
+  toggleFavorite: (id) => set((state) => {
+    const ids = state.favoriteProfileIds;
+    const favoriteProfileIds = ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id];
+    try {
+      window.localStorage.setItem(FAVORITES_KEY, JSON.stringify(favoriteProfileIds));
+    } catch {
+      // 存储不可用时仍保留本次会话中的收藏。
+    }
+    return { favoriteProfileIds };
+  }),
 
   loadProfiles: async () => {
     set({ profilesLoading: true, profilesError: null });
@@ -145,7 +173,7 @@ export const useAppStore = create<AppStore>()((set, get) => ({
     if (initialInput) pane.initialInput = initialInput;
     const tab: TabState = {
       id: `tab-${Date.now().toString(36)}-${paneSeq}`,
-      title: profile.name,
+      title: pane.profileName,
       panes: [pane],
       activePane: 0,
       direction: "row",
@@ -154,7 +182,7 @@ export const useAppStore = create<AppStore>()((set, get) => ({
     set((state) => ({
       tabs: [...state.tabs, tab],
       activeTabId: tab.id,
-      recentProfileIds: pushRecent(state.recentProfileIds, profile.id),
+      recentProfileIds: pane.localShell ? state.recentProfileIds : pushRecent(state.recentProfileIds, pane.profileId),
     }));
   },
 
@@ -171,7 +199,7 @@ export const useAppStore = create<AppStore>()((set, get) => ({
             }
           : tab,
       ),
-      recentProfileIds: pushRecent(state.recentProfileIds, profile.id),
+      recentProfileIds: pane.localShell ? state.recentProfileIds : pushRecent(state.recentProfileIds, pane.profileId),
     }));
   },
 
@@ -280,6 +308,13 @@ export const useAppStore = create<AppStore>()((set, get) => ({
             }
           : tab,
       ),
+    })),
+
+  updatePaneTools: (tabId, paneKey, patch) =>
+    set((state) => ({
+      tabs: state.tabs.map((tab) => tab.id === tabId
+        ? { ...tab, panes: tab.panes.map((pane) => pane.key === paneKey ? { ...pane, ...patch } : pane) }
+        : tab),
     })),
 
   setSftpProfileId: (id) => set({ sftpProfileId: id }),

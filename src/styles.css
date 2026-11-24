@@ -5028,3 +5028,151 @@ select:disabled {
 .form-grid.ssh-address-grid {
   grid-template-columns: minmax(0, 3fr) minmax(0, 1fr);
 }
+
+.is-terminal-view .activitybar {
+  order: -2;
+  border-left: 0;
+  border-right: 1px solid var(--border);
+}
+
+.is-terminal-view .ai-panel {
+  order: -1;
+}
+
+.is-terminal-view .terminal-pane .pane-head {
+  height: 22px;
+}
+
+.cmd-keys {
+  padding: 4px 8px 2px;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.titlebar .tabbar {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  align-items: center;
+  padding: 0 8px;
+  background: transparent;
+}
+
+.titlebar .tab-tools {
+  align-self: center;
+}
+
+.app-shell:not(.is-terminal-view) .titlebar .tab-tools,
+.app-shell:not(.is-terminal-view) .activitybar,
+.workspace-body.is-hidden {
+  display: none;
+}
+
+.asset-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+}
+
+.asset-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 12px;
+}
+
+.asset-table th,
+.asset-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.asset-table th {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  font-weight: 500;
+}
+
+.asset-table tbody tr:hover {
+  background: var(--hover);
+}
+
+.asset-table th:last-child,
+.asset-table td:last-child {
+  width: 1%;
+}
+
+.asset-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.asset-table .asset-star {
+  width: 36px;
+  padding-inline: 8px;
+}
+
+.asset-star [aria-pressed="true"],
+.asset-filter[aria-pressed="true"] {
+  color: var(--accent);
+}
+
+.asset-star [aria-pressed="true"] svg {
+  fill: currentColor;
+}
+
+.asset-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+}
+
+.asset-filter-child {
+  display: flex;
+  margin: 0 12px 2px 24px;
+}
+
+.dlg-mask > .host-key-mask {
+  z-index: 52;
+}
+
+.host-key-value {
+  display: block;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.ssh-progress {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0;
+  padding-inline-start: 24px;
+}
+
+.ssh-progress li[data-step="done"] {
+  color: var(--accent);
+}
+
+.ssh-progress li[data-step="pending"] {
+  color: var(--text-dim);
+}
+
+.ssh-progress li[data-step="error"] {
+  color: var(--danger);
+}
+
+.overlay-error .ov-desc {
+  white-space: pre-wrap;
+}
+
+.session-sftp:not([hidden]) {
+  display: contents;
+}

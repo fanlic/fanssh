@@ -1,3 +1,5 @@
+import { HostKeyDialog } from "./HostKeyDialog";
+import type { HostKeyPrompt } from "../types";
 import { useEffect, useRef, useState } from "react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import {
@@ -5,6 +7,8 @@ import {
   profileUpsert,
   readTextFile,
   sshTestConnection,
+  termAuthRespond,
+  termHostKeyRespond,
   serialListPorts,
   vaultPut,
 } from "../api";
@@ -360,6 +364,9 @@ export function SessionDialog({
 }: Props) {
   const [form, setForm] = useState<FormState>(() => toForm(initial, defaultProtocol));
   const [saving, setSaving] = useState(false);
+  const [testHostKey, setTestHostKey] = useState<HostKeyPrompt | null>(null);
+  const dialogOpenRef = useRef(open);
+  dialogOpenRef.current = open;
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
   const protocolPorts = useRef<Record<Protocol, string>>({ ...DEFAULT_PORT_BY_PROTOCOL });
@@ -468,11 +475,19 @@ export function SessionDialog({
         password: form.password || null,
         key_text: form.keyText || null,
         passphrase: form.passphrase || null,
+      }, (event) => {
+        if (event.type === "host_key_prompt") {
+          if (dialogOpenRef.current) setTestHostKey(event);
+          else void termHostKeyRespond(event.prompt_id, "cancel").catch(() => undefined);
+        } else if (event.type === "auth_prompt") {
+          void termAuthRespond(event.prompt_id, null).catch(() => undefined);
+        }
       });
       setTestResult({ kind: "ok", message });
     } catch (error) {
       setTestResult({ kind: "error", message: errorText(error) });
     } finally {
+      setTestHostKey(null);
       setTesting(false);
     }
   };
@@ -2095,6 +2110,9 @@ export function SessionDialog({
           </button>
         </div>
       </div>
+      {testHostKey && (
+        <HostKeyDialog key={testHostKey.prompt_id} prompt={testHostKey} onDone={() => setTestHostKey(null)} />
+      )}
     </div>
   );
 }
