@@ -1015,7 +1015,12 @@ export function TerminalPane({ tabId, pane, active }: Props) {
           </button>
         </div>
       )}
-      {hasShell && <span className="ghost-text" ref={ghostRef} style={{ fontFamily: liveTerminal.font_family }} />}
+      {hasShell && <span className="ghost-text" ref={ghostRef} style={{
+        fontFamily: liveTerminal.font_family,
+        fontSize: liveTerminal.font_size,
+        lineHeight: liveTerminal.line_height,
+        letterSpacing: liveTerminal.letter_spacing,
+      }} />}
       {hasShell && completions.length > 0 && completionPos && (
         <div
           className={`cmd-pop${completionPos.above ? " is-above" : ""}`}

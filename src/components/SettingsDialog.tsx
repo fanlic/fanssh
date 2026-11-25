@@ -30,7 +30,7 @@ interface Props {
 type Phase = "idle" | "checking" | "uptodate" | "available" | "confirm" | "installing" | "installed";
 type Page = "appearance" | "terminal" | "shortcuts" | "security" | "update" | "about";
 
-const FONT_CANDIDATES = ["Ubuntu", "Menlo", "Monaco", "Consolas", "Courier New", "MesloLGS NF"];
+const FONT_CANDIDATES = ["Cascadia Mono", "Consolas", "Menlo", "Monaco", "Ubuntu Mono", "DejaVu Sans Mono", "Courier New", "MesloLGS NF"];
 
 const SHORTCUT_ROWS: Array<{ key: keyof ShortcutSettings; label: string; desc?: string }> = [
   { key: "open_settings", label: "打开设置" },

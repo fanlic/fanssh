@@ -118,6 +118,34 @@ pub struct TerminalSettings {
     pub right_click: String,
 }
 
+impl TerminalSettings {
+    fn migrate_legacy_font(&mut self) -> bool {
+        const LEGACY_FONTS: [&str; 7] = [
+            "Ubuntu",
+            "Menlo",
+            "Monaco",
+            "Consolas",
+            "Courier New",
+            "Noto Sans Mono CJK SC",
+            "monospace",
+        ];
+        let families = self
+            .font_family
+            .split(',')
+            .map(|family| family.trim().trim_matches(['"', '\'']));
+        if !families.eq(LEGACY_FONTS) {
+            return false;
+        }
+
+        let defaults = Self::default();
+        self.font_family = defaults.font_family;
+        if self.font_size == 16 && self.letter_spacing == 0.0 && self.line_height == 1.0 {
+            self.font_size = defaults.font_size;
+        }
+        true
+    }
+}
+
 impl Default for TerminalSettings {
     fn default() -> Self {
         Self {
@@ -198,8 +226,16 @@ impl SettingsStore {
         let path = dir.join("settings.json");
         let (ai, ui) = if path.exists() {
             let bytes = std::fs::read(&path).context("读取 settings.json 失败")?;
-            let file = serde_json::from_slice::<SettingsFile>(&bytes)
+            let mut file = serde_json::from_slice::<SettingsFile>(&bytes)
                 .context("解析 settings.json 失败")?;
+            if file.ui.terminal.migrate_legacy_font() {
+                let result = serde_json::to_vec_pretty(&file)
+                    .map_err(anyhow::Error::from)
+                    .and_then(|bytes| write_atomic(&path, &bytes));
+                if let Err(error) = result {
+                    log::warn!("保存终端字体迁移失败: {error:#}");
+                }
+            }
             (file.ai, file.ui)
         } else {
             (AiSettingsFile::default(), UiSettings::default())
@@ -244,5 +280,35 @@ impl SettingsStore {
     fn write(&self, file: &SettingsFile) -> Result<()> {
         let bytes = serde_json::to_vec_pretty(file)?;
         write_atomic(&self.path, &bytes)
+    }
+}
+
+#[cfg(test)]
+mod terminal_font_tests {
+    use super::TerminalSettings;
+
+    #[test]
+    fn migrates_legacy_default_typography_and_preserves_custom_settings() {
+        let old =
+            "Ubuntu, Menlo, Monaco, Consolas, 'Courier New', 'Noto Sans Mono CJK SC', monospace";
+        let mut settings = TerminalSettings {
+            font_family: old.into(),
+            font_size: 16,
+            ..Default::default()
+        };
+        assert!(settings.migrate_legacy_font());
+        assert_eq!(
+            settings.font_family,
+            TerminalSettings::default().font_family
+        );
+        assert_eq!(settings.font_size, 14);
+
+        settings.font_family = old.into();
+        settings.font_size = 18;
+        assert!(settings.migrate_legacy_font());
+        assert_eq!(settings.font_size, 18);
+
+        settings.font_family = "Ubuntu, monospace".into();
+        assert!(!settings.migrate_legacy_font());
     }
 }

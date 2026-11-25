@@ -82,10 +82,6 @@ export const useUiSettingsStore = create<UiSettingsStore>()((set, get) => ({
     if (!loadPromise) {
       loadPromise = uiSettingsGet()
         .then((settings) => {
-          const terminal = settings.terminal;
-          if (terminal.font_family === '"Ubuntu", "Menlo", "Monaco", "Consolas", "Courier New", "Noto Sans Mono CJK SC", monospace') {
-            terminal.font_family = DEFAULT_TERMINAL.font_family;
-          }
           set({ settings, loaded: true, error: null });
         })
         .catch(() => {
