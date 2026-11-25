@@ -3,9 +3,11 @@ import { Icon } from "./Icon";
 interface Props {
   sftpOpen: boolean;
   dockerOpen: boolean;
+  monitorOpen: boolean;
   aiOpen: boolean;
   onToggleSftp: () => void;
   onToggleDocker: () => void;
+  onToggleMonitor: () => void;
   onToggleAi: () => void;
 }
 
@@ -13,9 +15,11 @@ interface Props {
 export function ActivityBar({
   sftpOpen,
   dockerOpen,
+  monitorOpen,
   aiOpen,
   onToggleSftp,
   onToggleDocker,
+  onToggleMonitor,
   onToggleAi,
 }: Props) {
   return (
@@ -26,7 +30,7 @@ export function ActivityBar({
         aria-pressed={sftpOpen}
         onClick={onToggleSftp}
       >
-        <Icon name="folder" size={17} />
+        <Icon name="transfer" size={17} />
       </button>
       <button
         className={`ab-btn${dockerOpen ? " is-active" : ""}`}
@@ -37,12 +41,20 @@ export function ActivityBar({
         <Icon name="docker" size={17} />
       </button>
       <button
+        className={`ab-btn${monitorOpen ? " is-active" : ""}`}
+        title={monitorOpen ? "关闭服务器监控" : "打开服务器监控"}
+        aria-pressed={monitorOpen}
+        onClick={onToggleMonitor}
+      >
+        <Icon name="pulse" size={17} />
+      </button>
+      <button
         className={`ab-btn${aiOpen ? " is-active" : ""}`}
         title={aiOpen ? "收起 AI 面板 (Ctrl Shift J)" : "展开 AI 面板 (Ctrl Shift J)"}
         aria-pressed={aiOpen}
         onClick={onToggleAi}
       >
-        <Icon name={aiOpen ? "panel" : "spark"} size={17} />
+        <Icon name="spark" size={17} />
       </button>
     </nav>
   );

@@ -5,19 +5,146 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::ai;
-use crate::app::settings::AiSettingsFile;
+use crate::app::settings::{AiSettingsFile, UiSettings};
 use crate::app::AppState;
 use crate::docker::{self, DockerContainer, DockerLogs};
 use crate::ipc::dto::{
-    AiChatRequest, AiSettingsInput, AiSettingsView, Nl2CmdResult, RdpHandleDto, RemoteEntry,
-    SerialPortInfo, SftpOpenResp, TermEvent, TransferEvent, UpdateEvent, UpdateInfoDto,
-    UpdaterStatusDto,
+    AiChatRequest, AiSettingsInput, AiSettingsView, Nl2CmdResult, RdpEvent, RdpInputDto,
+    RemoteEntry, SerialPortInfo, SftpOpResult, SftpOpenResp, SftpTextFile, TermEvent,
+    TransferEvent, UpdateEvent, UpdateInfoDto, UpdaterStatusDto, VncEvent, VncInputDto,
 };
 use crate::ipc::error::{AppError, AppResult};
+use crate::monitor::MonitorEvent;
 use crate::profile::ImportError;
 use crate::serial::SerialManager;
 use crate::session::model::{AuthRef, Profile, Protocol, SecretKind, SessionId};
-use crate::vault::SecretRef;
+use crate::transport::ssh::connect_profile;
+use crate::vault::{SecretRef, Vault};
+
+#[derive(serde::Deserialize)]
+pub struct SshTestSecrets {
+    #[serde(default)]
+    password: Option<String>,
+    #[serde(default)]
+    key_text: Option<String>,
+    #[serde(default)]
+    passphrase: Option<String>,
+}
+
+#[tauri::command]
+pub async fn ssh_test_connection(
+    state: State<'_, AppState>,
+    mut profile: Profile,
+    secrets: SshTestSecrets,
+    on_event: TauriChannel<TermEvent>,
+) -> AppResult<String> {
+    if !matches!(profile.protocol, Protocol::Ssh) {
+        return Err(AppError::new("ssh.unsupported", "测试连接仅支持 SSH 配置"));
+    }
+    let temp_dir = std::env::temp_dir().join(format!("fanssh-test-{}", Uuid::new_v4()));
+    let temp_vault = Vault::open(&temp_dir)
+        .map_err(|e| AppError::new("ssh.test_failed", format!("创建临时凭据库失败：{e:#}")))?;
+    match &mut profile.auth {
+        AuthRef::Password { secret } => {
+            let password = match secrets
+                .password
+                .as_deref()
+                .filter(|item| !item.trim().is_empty())
+            {
+                Some(password) => password.to_string(),
+                None => state
+                    .vault
+                    .get(secret)
+                    .map_err(|e| {
+                        AppError::new("ssh.test_failed", format!("读取已保存密码失败：{e:#}"))
+                    })?
+                    .to_string(),
+            };
+            *secret = temp_vault
+                .put(None, SecretKind::Password, "测试密码", &password)
+                .map_err(|e| {
+                    AppError::new("ssh.test_failed", format!("写入临时密码失败：{e:#}"))
+                })?;
+        }
+        AuthRef::Key { key, passphrase } => {
+            let key_text = match secrets
+                .key_text
+                .as_deref()
+                .filter(|item| !item.trim().is_empty())
+            {
+                Some(text) => text.to_string(),
+                None => state
+                    .vault
+                    .get(key)
+                    .map_err(|e| {
+                        AppError::new("ssh.test_failed", format!("读取已保存私钥失败：{e:#}"))
+                    })?
+                    .to_string(),
+            };
+            *key = temp_vault
+                .put(None, SecretKind::PrivateKey, "测试私钥", &key_text)
+                .map_err(|e| {
+                    AppError::new("ssh.test_failed", format!("写入临时私钥失败：{e:#}"))
+                })?;
+
+            let next_passphrase = match secrets
+                .passphrase
+                .as_deref()
+                .filter(|item| !item.trim().is_empty())
+            {
+                Some(text) => Some(text.to_string()),
+                None => passphrase
+                    .as_ref()
+                    .and_then(|id| state.vault.get(id).ok().map(|text| text.to_string())),
+            };
+            *passphrase = match next_passphrase {
+                Some(text) => Some(
+                    temp_vault
+                        .put(None, SecretKind::Passphrase, "测试私钥口令", &text)
+                        .map_err(|e| {
+                            AppError::new("ssh.test_failed", format!("写入临时私钥口令失败：{e:#}"))
+                        })?,
+                ),
+                None => None,
+            };
+        }
+        AuthRef::KeyboardInteractive => {
+            return Err(AppError::new(
+                "ssh.test_unsupported",
+                "交互认证需要服务端动态提示，请保存后打开连接进行测试",
+            ));
+        }
+        AuthRef::None => {}
+    }
+    let auth_ui = crate::transport::ssh::AuthUi {
+        prompts: &state.ssh.auth_prompts,
+        on_event: &on_event,
+    };
+    let result = connect_profile(
+        &profile,
+        &temp_vault,
+        state.known_hosts.clone(),
+        Some(auth_ui),
+    )
+    .await;
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    match result {
+        Ok(connected) => {
+            let _ = connected
+                .handle
+                .disconnect(russh::Disconnect::ByApplication, "test complete", "en")
+                .await;
+            Ok(format!(
+                "连接成功：{}@{}:{}",
+                profile.target.user, profile.target.host, profile.target.port
+            ))
+        }
+        Err(error) => Err(AppError::new(
+            "ssh.test_failed",
+            format!("连接测试失败：{error:#}"),
+        )),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // 终端
@@ -40,7 +167,23 @@ pub async fn term_open(
         ));
     }
     let vault = state.vault.clone();
-    state.ssh.open(profile, vault, on_event).await
+    let known_hosts = state.known_hosts.clone();
+    state.ssh.open(profile, vault, known_hosts, on_event).await
+}
+
+#[tauri::command]
+pub async fn local_term_open(
+    state: State<'_, AppState>,
+    shell: crate::session::local::LocalShell,
+    cols: u16,
+    rows: u16,
+    on_event: TauriChannel<TermEvent>,
+) -> AppResult<SessionId> {
+    let manager = state.local.clone();
+    tokio::task::spawn_blocking(move || manager.open(shell, cols, rows, on_event))
+        .await
+        .map_err(AppError::internal)?
+        .map_err(|error| AppError::new("local.open_failed", error.to_string()))
 }
 
 #[tauri::command]
@@ -48,7 +191,15 @@ pub async fn term_input(
     state: State<'_, AppState>,
     session: SessionId,
     bytes: Vec<u8>,
+    local: Option<bool>,
 ) -> AppResult<()> {
+    if local == Some(true) {
+        return state
+            .local
+            .write(session, bytes)
+            .await
+            .map_err(AppError::internal);
+    }
     state.ssh.write(session, bytes).await
 }
 
@@ -58,16 +209,82 @@ pub async fn term_resize(
     session: SessionId,
     cols: u16,
     rows: u16,
+    local: Option<bool>,
 ) -> AppResult<()> {
     if cols == 0 || rows == 0 {
         return Ok(());
+    }
+    if local == Some(true) {
+        return state
+            .local
+            .resize(session, cols, rows)
+            .await
+            .map_err(AppError::internal);
     }
     state.ssh.resize(session, cols, rows).await
 }
 
 #[tauri::command]
-pub async fn term_close(state: State<'_, AppState>, session: SessionId) -> AppResult<()> {
+pub async fn term_close(
+    state: State<'_, AppState>,
+    session: SessionId,
+    local: Option<bool>,
+) -> AppResult<()> {
+    if local == Some(true) {
+        let manager = state.local.clone();
+        return tokio::task::spawn_blocking(move || manager.close(session))
+            .await
+            .map_err(AppError::internal)?
+            .map_err(AppError::internal);
+    }
     state.ssh.close(session).await
+}
+
+#[tauri::command]
+pub async fn term_host_key_respond(
+    state: State<'_, AppState>,
+    prompt_id: Uuid,
+    decision: crate::transport::ssh::HostKeyDecision,
+) -> AppResult<()> {
+    if state
+        .ssh
+        .auth_prompts
+        .respond_host_key(prompt_id, decision)
+        .await
+    {
+        Ok(())
+    } else {
+        Err(AppError::new(
+            "ssh.prompt_expired",
+            "主机指纹提示已失效，请重新连接",
+        ))
+    }
+}
+
+/// 键盘交互认证：提交用户输入；responses 为 None 表示用户取消。
+#[tauri::command]
+pub async fn term_auth_respond(
+    state: State<'_, AppState>,
+    prompt_id: Uuid,
+    responses: Option<Vec<String>>,
+) -> AppResult<()> {
+    state.ssh.respond_auth(prompt_id, responses).await
+}
+
+/// 读取用户通过文件对话框选择的本地私钥。限制大小，避免误选大文件。
+#[tauri::command]
+pub async fn read_text_file(path: String) -> AppResult<String> {
+    let path = PathBuf::from(path);
+    let meta = std::fs::metadata(&path)
+        .map_err(|e| AppError::new("file.read_failed", format!("读取文件失败：{e}")))?;
+    if !meta.is_file() {
+        return Err(AppError::new("file.not_file", "所选路径不是文件"));
+    }
+    if meta.len() > 2 * 1024 * 1024 {
+        return Err(AppError::new("file.too_large", "文件超过 2 MB，已拒绝读取"));
+    }
+    std::fs::read_to_string(&path)
+        .map_err(|e| AppError::new("file.read_failed", format!("读取文件失败：{e}")))
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +307,28 @@ pub async fn docker_logs(
     tail: Option<u32>,
 ) -> AppResult<DockerLogs> {
     docker::logs(&state.ssh, session, &container, tail.unwrap_or(500)).await
+}
+
+// ---------------------------------------------------------------------------
+// 服务器监控（只读 /proc 采样，不在远端写文件）
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn monitor_start(
+    state: State<'_, AppState>,
+    session: SessionId,
+    on_event: TauriChannel<MonitorEvent>,
+) -> AppResult<()> {
+    state
+        .monitor
+        .start(state.ssh.clone(), session, on_event)
+        .await
+}
+
+#[tauri::command]
+pub async fn monitor_stop(state: State<'_, AppState>, session: SessionId) -> AppResult<()> {
+    state.monitor.stop(session).await;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -143,6 +382,83 @@ pub async fn serial_set_lines(
 #[tauri::command]
 pub async fn serial_close(state: State<'_, AppState>, session: SessionId) -> AppResult<()> {
     state.serial.close(session)
+}
+
+// ---------------------------------------------------------------------------
+// Telnet
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn telnet_open(
+    state: State<'_, AppState>,
+    profile_id: Uuid,
+    on_event: TauriChannel<TermEvent>,
+) -> AppResult<SessionId> {
+    let profile = state
+        .profiles
+        .get(&profile_id)
+        .ok_or_else(|| AppError::new("profile.not_found", "服务器配置不存在"))?;
+    if !matches!(profile.protocol, Protocol::Telnet) {
+        return Err(AppError::new(
+            "telnet.invalid_profile",
+            "该配置不是 Telnet 协议，无法打开终端",
+        ));
+    }
+    let vault = state.vault.clone();
+    state.telnet.open(profile, vault, on_event).await
+}
+
+#[tauri::command]
+pub async fn telnet_input(
+    state: State<'_, AppState>,
+    session: SessionId,
+    bytes: Vec<u8>,
+) -> AppResult<()> {
+    state.telnet.write(session, bytes).await
+}
+
+#[tauri::command]
+pub async fn telnet_close(state: State<'_, AppState>, session: SessionId) -> AppResult<()> {
+    state.telnet.close(session).await
+}
+
+// ---------------------------------------------------------------------------
+// VNC
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn vnc_open(
+    state: State<'_, AppState>,
+    profile_id: Uuid,
+    on_event: TauriChannel<VncEvent>,
+    on_frame: TauriChannel<tauri::ipc::InvokeResponseBody>,
+) -> AppResult<SessionId> {
+    let profile = state
+        .profiles
+        .get(&profile_id)
+        .ok_or_else(|| AppError::new("profile.not_found", "VNC 配置不存在"))?;
+    if !matches!(profile.protocol, Protocol::Vnc) {
+        return Err(AppError::new(
+            "vnc.invalid_profile",
+            "该配置不是 VNC 协议，无法打开画面",
+        ));
+    }
+    let vault = state.vault.clone();
+    state.vnc.open(profile, vault, on_event, on_frame).await
+}
+
+#[tauri::command]
+pub async fn vnc_input(
+    state: State<'_, AppState>,
+    session: SessionId,
+    input: VncInputDto,
+) -> AppResult<()> {
+    state.vnc.input(session, input).await
+}
+
+#[tauri::command]
+pub async fn vnc_close(state: State<'_, AppState>, session: SessionId) -> AppResult<()> {
+    state.vnc.close(session).await
 }
 
 // ---------------------------------------------------------------------------
@@ -222,6 +538,29 @@ pub async fn profile_import(
 }
 
 // ---------------------------------------------------------------------------
+// SSH 主机密钥
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn known_hosts_list(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<crate::known_hosts::KnownHostEntry>> {
+    Ok(state.known_hosts.list())
+}
+
+#[tauri::command]
+pub async fn known_hosts_delete(
+    state: State<'_, AppState>,
+    host: String,
+    port: u16,
+) -> AppResult<bool> {
+    state
+        .known_hosts
+        .delete(&host, port)
+        .map_err(|e| AppError::new("known_hosts.delete_failed", format!("{e:#}")))
+}
+
+// ---------------------------------------------------------------------------
 // 凭据库
 // ---------------------------------------------------------------------------
 
@@ -268,7 +607,18 @@ pub async fn vault_delete(state: State<'_, AppState>, id: Uuid) -> AppResult<()>
 pub async fn sftp_open(
     state: State<'_, AppState>,
     profile_id: Uuid,
+    session: Option<SessionId>,
 ) -> AppResult<SftpOpenResp> {
+    if let Some(session) = session {
+        let handle = state.ssh.handle(session).await?;
+        let (sftp_id, home) = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            state.sftp.open_existing(handle),
+        )
+        .await
+        .map_err(|_| AppError::new("sftp.timeout", "SFTP 子系统初始化超时"))??;
+        return Ok(SftpOpenResp { sftp_id, home });
+    }
     let profile = state
         .profiles
         .get(&profile_id)
@@ -277,8 +627,9 @@ pub async fn sftp_open(
         return Err(AppError::new("sftp.unsupported", "SFTP 需要 SSH 协议配置"));
     }
     let vault = state.vault.clone();
+    let known_hosts = state.known_hosts.clone();
     let sftp = state.sftp.clone();
-    let (sftp_id, home) = sftp.open(&profile, &vault).await?;
+    let (sftp_id, home) = sftp.open(&profile, &vault, known_hosts).await?;
     Ok(SftpOpenResp { sftp_id, home })
 }
 
@@ -300,7 +651,9 @@ pub async fn sftp_chmod(
     mode: u32,
 ) -> AppResult<()> {
     let sftp = state.sftp.clone();
-    sftp.chmod(sftp_id, &path, mode).await.map_err(AppError::from)
+    sftp.chmod(sftp_id, &path, mode)
+        .await
+        .map_err(AppError::from)
 }
 
 #[tauri::command]
@@ -309,12 +662,21 @@ pub async fn sftp_upload(
     sftp_id: Uuid,
     local_paths: Vec<String>,
     remote_dir: String,
+    conflict: String,
+    restart: bool,
     on_event: TauriChannel<TransferEvent>,
 ) -> AppResult<()> {
     let sftp = state.sftp.clone();
-    sftp.upload(sftp_id, local_paths, remote_dir, on_event)
-        .await
-        .map_err(AppError::from)
+    sftp.upload(
+        sftp_id,
+        local_paths,
+        remote_dir,
+        conflict,
+        restart,
+        on_event,
+    )
+    .await
+    .map_err(AppError::from)
 }
 
 #[tauri::command]
@@ -323,12 +685,81 @@ pub async fn sftp_download(
     sftp_id: Uuid,
     remote_path: String,
     local_path: String,
+    conflict: String,
+    restart: bool,
     on_event: TauriChannel<TransferEvent>,
 ) -> AppResult<()> {
     let sftp = state.sftp.clone();
-    sftp.download(sftp_id, remote_path, local_path, on_event)
+    sftp.download(
+        sftp_id,
+        remote_path,
+        local_path,
+        conflict,
+        restart,
+        on_event,
+    )
+    .await
+    .map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn sftp_rename(
+    state: State<'_, AppState>,
+    sftp_id: Uuid,
+    from: String,
+    to: String,
+) -> AppResult<()> {
+    let sftp = state.sftp.clone();
+    sftp.rename(sftp_id, &from, &to)
         .await
         .map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn sftp_mkdir(state: State<'_, AppState>, sftp_id: Uuid, path: String) -> AppResult<()> {
+    let sftp = state.sftp.clone();
+    sftp.mkdir(sftp_id, &path).await.map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn sftp_remove(
+    state: State<'_, AppState>,
+    sftp_id: Uuid,
+    paths: Vec<String>,
+) -> AppResult<Vec<SftpOpResult>> {
+    let sftp = state.sftp.clone();
+    sftp.remove_many(sftp_id, paths)
+        .await
+        .map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn sftp_read_text(
+    state: State<'_, AppState>,
+    sftp_id: Uuid,
+    path: String,
+) -> AppResult<SftpTextFile> {
+    let sftp = state.sftp.clone();
+    sftp.read_text(sftp_id, &path).await.map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn sftp_write_text(
+    state: State<'_, AppState>,
+    sftp_id: Uuid,
+    path: String,
+    content: String,
+    expected_mtime: Option<u32>,
+) -> AppResult<SftpTextFile> {
+    let sftp = state.sftp.clone();
+    sftp.write_text(sftp_id, &path, &content, expected_mtime)
+        .await
+        .map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn sftp_local_exists(path: String) -> AppResult<bool> {
+    Ok(std::path::Path::new(&path).exists())
 }
 
 #[tauri::command]
@@ -389,11 +820,49 @@ pub async fn ai_settings_save(
     Ok(to_view(saved, &*state))
 }
 
+// ---------------------------------------------------------------------------
+// 界面设置（主题 / 终端 / 快捷键）
+// ---------------------------------------------------------------------------
+
 #[tauri::command]
-pub async fn ai_chat(
+pub async fn ui_settings_get(state: State<'_, AppState>) -> AppResult<UiSettings> {
+    Ok(state.settings.ui())
+}
+
+#[tauri::command]
+pub async fn ui_settings_save(
     state: State<'_, AppState>,
-    request: AiChatRequest,
-) -> AppResult<String> {
+    settings: UiSettings,
+) -> AppResult<UiSettings> {
+    let mut settings = settings;
+    // 后端做边界约束，避免前端写入极端值破坏终端渲染。
+    settings.terminal.font_size = settings.terminal.font_size.clamp(10, 32);
+    settings.terminal.line_height = settings.terminal.line_height.clamp(0.8, 2.0);
+    settings.terminal.letter_spacing = settings.terminal.letter_spacing.clamp(-2.0, 6.0);
+    settings.terminal.scrollback = settings.terminal.scrollback.clamp(100, 100_000);
+    if !matches!(
+        settings.terminal.cursor_style.as_str(),
+        "bar" | "block" | "underline"
+    ) {
+        settings.terminal.cursor_style = "bar".to_string();
+    }
+    if !matches!(
+        settings.terminal.inactive_cursor_style.as_str(),
+        "none" | "outline" | "block" | "bar" | "underline"
+    ) {
+        settings.terminal.inactive_cursor_style = "none".to_string();
+    }
+    if !matches!(settings.terminal.right_click.as_str(), "menu" | "paste") {
+        settings.terminal.right_click = "menu".to_string();
+    }
+    state
+        .settings
+        .save_ui(settings)
+        .map_err(|e| AppError::new("ui.save_failed", format!("{e:#}")))
+}
+
+#[tauri::command]
+pub async fn ai_chat(state: State<'_, AppState>, request: AiChatRequest) -> AppResult<String> {
     let settings = state.settings.ai();
     let api_key = read_api_key(&*state, &settings)?;
     let api_key = api_key.as_ref().map(|key| key.as_str());
@@ -437,11 +906,9 @@ pub async fn ai_nl2cmd(
 
     let result = ai::parse_nl2cmd(&raw);
     if result.command.trim().is_empty() {
-        return Err(AppError::new(
-            "ai.invalid_response",
-            "模型没有返回可执行的命令",
-        )
-        .with_detail(raw));
+        return Err(
+            AppError::new("ai.invalid_response", "模型没有返回可执行的命令").with_detail(raw),
+        );
     }
     Ok(result)
 }
@@ -478,27 +945,101 @@ fn read_api_key(
 // RDP
 // ---------------------------------------------------------------------------
 
+/// 打开内嵌 RDP 会话（Windows / Linux 共用）。密码优先使用本次一次性输入，其次从 vault 解密；
+/// 两者都没有时返回 rdp.password_required，由前端弹一次性密码框后重试。
 #[tauri::command]
-pub async fn rdp_launch(
+pub async fn rdp_open(
     state: State<'_, AppState>,
     profile_id: Uuid,
-) -> AppResult<RdpHandleDto> {
+    password: Option<String>,
+    on_event: TauriChannel<RdpEvent>,
+    on_frame: TauriChannel<tauri::ipc::InvokeResponseBody>,
+) -> AppResult<SessionId> {
     let profile = state
         .profiles
         .get(&profile_id)
-        .ok_or_else(|| AppError::new("profile.not_found", "服务器配置不存在"))?;
+        .ok_or_else(|| AppError::new("profile.not_found", "RDP 配置不存在"))?;
     if !matches!(profile.protocol, Protocol::Rdp) {
         return Err(AppError::new(
             "rdp.invalid_profile",
-            "该配置不是 RDP 协议，请先在配置中选择 RDP",
+            "该配置不是 RDP 协议，无法打开远程桌面",
         ));
     }
-    // RDP 密码同样只从 vault 解密到内存，交给凭据管理器写入；没填密码就交给 mstsc 弹窗。
-    let password = match &profile.auth {
-        AuthRef::Password { secret } => Some(state.vault.get(secret)?.to_string()),
-        _ => None,
-    };
-    crate::transport::rdp::launch(&profile, password.as_deref(), &state.data_dir)
+    let vault = state.vault.clone();
+    state
+        .rdp
+        .open(profile, vault, password, on_event, on_frame)
+        .await
+}
+
+#[tauri::command]
+pub async fn rdp_input(
+    state: State<'_, AppState>,
+    session: SessionId,
+    input: RdpInputDto,
+) -> AppResult<()> {
+    state.rdp.input(session, input).await
+}
+
+#[tauri::command]
+pub async fn rdp_close(state: State<'_, AppState>, session: SessionId) -> AppResult<()> {
+    state.rdp.close(session).await
+}
+
+// ---------------------------------------------------------------------------
+// 端口转发 / 隧道
+// ---------------------------------------------------------------------------
+
+/// 启动一条转发路由。路由由后端从配置中按 id 取出，前端不能注入任意目标。
+#[tauri::command]
+pub async fn tunnel_start(
+    state: State<'_, AppState>,
+    profile_id: Uuid,
+    route_id: Uuid,
+    on_event: TauriChannel<crate::ipc::dto::TunnelEvent>,
+) -> AppResult<()> {
+    let profile = state
+        .profiles
+        .get(&profile_id)
+        .ok_or_else(|| AppError::new("profile.not_found", "隧道配置不存在"))?;
+    if !matches!(profile.protocol, Protocol::Tunnel) {
+        return Err(AppError::new(
+            "tunnel.invalid_profile",
+            "该配置不是隧道协议",
+        ));
+    }
+    let prefs = profile.tunnel_prefs();
+    let server_id = prefs
+        .server_id
+        .ok_or_else(|| AppError::new("tunnel.server_missing", "隧道还没有选择 SSH 服务器"))?;
+    let server = state.profiles.get(&server_id).ok_or_else(|| {
+        AppError::new(
+            "tunnel.server_missing",
+            "隧道绑定的 SSH 服务器已被删除，请重新选择服务器",
+        )
+    })?;
+    let route = prefs
+        .routes
+        .iter()
+        .find(|route| route.id == route_id)
+        .cloned()
+        .ok_or_else(|| AppError::new("tunnel.route_missing", "找不到该转发路由"))?;
+    let vault = state.vault.clone();
+    let known_hosts = state.known_hosts.clone();
+    state
+        .tunnel
+        .start(&profile, server, vault, known_hosts, route, on_event)
+        .await
+}
+
+#[tauri::command]
+pub async fn tunnel_stop(state: State<'_, AppState>, route_id: Uuid) -> AppResult<()> {
+    state.tunnel.stop(route_id).await
+}
+
+#[tauri::command]
+pub async fn tunnel_active(state: State<'_, AppState>) -> AppResult<Vec<Uuid>> {
+    Ok(state.tunnel.active().await)
 }
 
 // ---------------------------------------------------------------------------
@@ -535,6 +1076,41 @@ fn is_portable() -> bool {
         .unwrap_or(false)
 }
 
+/// 是否运行在 AppImage 内。AppImage 运行时由运行时注入 APPIMAGE（镜像路径）与 APPDIR。
+/// deb 安装后直接执行 /usr/bin 下的可执行文件，这两个变量都不存在。
+fn running_in_appimage() -> bool {
+    std::env::var_os("APPIMAGE").is_some() || std::env::var_os("APPDIR").is_some()
+}
+
+/// 运行时形态。Linux 下只有 AppImage 能就地替换镜像；deb 安装需要用户重新安装。
+fn update_runtime() -> &'static str {
+    if is_portable() {
+        return "portable";
+    }
+    match std::env::consts::OS {
+        "windows" => "windows",
+        "linux" => {
+            if running_in_appimage() {
+                "appimage"
+            } else {
+                "deb"
+            }
+        }
+        "macos" => "macos",
+        _ => "other",
+    }
+}
+
+/// 支持应用内自更新的运行时：Windows 安装版（NSIS）与 Linux AppImage。
+fn supports_self_update(runtime: &str) -> bool {
+    matches!(runtime, "windows" | "appimage")
+}
+
+/// deb 安装版不替换镜像，但允许检查版本并引导用户去更新通道下载新 deb。
+fn supports_update_check(runtime: &str) -> bool {
+    supports_self_update(runtime) || runtime == "deb"
+}
+
 fn build_updater(app: &tauri::AppHandle) -> AppResult<tauri_plugin_updater::Updater> {
     use tauri_plugin_updater::UpdaterExt;
 
@@ -555,20 +1131,30 @@ pub fn app_platform() -> String {
 #[tauri::command]
 pub async fn updater_status(app: tauri::AppHandle) -> AppResult<UpdaterStatusDto> {
     let endpoint = configured_endpoint(&app).unwrap_or_default();
+    let runtime = update_runtime();
     Ok(UpdaterStatusDto {
         current_version: app.package_info().version.to_string(),
         channel_url: channel_url(&endpoint),
         endpoint,
         portable: is_portable(),
+        runtime: runtime.to_string(),
+        self_update: supports_self_update(runtime),
     })
 }
 
 #[tauri::command]
 pub async fn updater_check(app: tauri::AppHandle) -> AppResult<Option<UpdateInfoDto>> {
-    if is_portable() {
+    let runtime = update_runtime();
+    if runtime == "portable" {
         return Err(AppError::new(
             "updater.portable",
             "便携版不支持自动更新，请到 Release 页面下载新的便携 zip",
+        ));
+    }
+    if !supports_update_check(runtime) {
+        return Err(AppError::new(
+            "updater.unsupported",
+            "当前平台不支持自动更新，请到 Release 页面下载新版本",
         ));
     }
     let updater = build_updater(&app)?;
@@ -576,12 +1162,19 @@ pub async fn updater_check(app: tauri::AppHandle) -> AppResult<Option<UpdateInfo
         .check()
         .await
         .map_err(|e| AppError::new("updater.check_failed", format!("检查更新失败：{e}")))?;
+    let self_update = supports_self_update(runtime);
+    let fallback_url = channel_url(&configured_endpoint(&app).unwrap_or_default());
     Ok(update.map(|update| UpdateInfoDto {
         version: update.version.to_string(),
         current_version: update.current_version.to_string(),
         notes: update.body.clone(),
         date: update.date.as_ref().map(|date| date.to_string()),
-        url: None,
+        // 能自更新的运行时给出安装包直链；deb 安装版给更新通道页面，由用户挑选 deb 重新安装
+        url: Some(if self_update {
+            update.download_url.to_string()
+        } else {
+            fallback_url
+        }),
     }))
 }
 
@@ -590,13 +1183,29 @@ pub async fn updater_install(
     app: tauri::AppHandle,
     on_event: TauriChannel<UpdateEvent>,
 ) -> AppResult<()> {
-    if is_portable() {
-        return Err(AppError::new(
-            "updater.portable",
-            "便携版不支持自动更新，请到 Release 页面下载新的便携 zip",
-        ));
+    match update_runtime() {
+        "portable" => {
+            return Err(AppError::new(
+                "updater.portable",
+                "便携版不支持自动更新，请到 Release 页面下载新的便携 zip",
+            ))
+        }
+        "deb" => {
+            return Err(AppError::new(
+                "updater.deb_install",
+                "deb 安装版不支持应用内自更新，请下载新版本后重新安装 deb",
+            ))
+        }
+        runtime if !supports_self_update(runtime) => {
+            return Err(AppError::new(
+                "updater.unsupported",
+                "当前平台不支持应用内自动更新，请到 Release 页面下载新版本",
+            ))
+        }
+        _ => {}
     }
     let updater = build_updater(&app)?;
+
     let update = updater
         .check()
         .await
@@ -622,4 +1231,36 @@ pub async fn updater_install(
         .map_err(|e| AppError::new("updater.install_failed", format!("下载或安装失败：{e}")))?;
     let _ = on_event.send(UpdateEvent::Installed);
     Ok(())
+}
+
+/// 用系统默认浏览器打开外链，只放行 http/https。
+/// 直接启动系统 opener 进程，不经过 shell，避免把 URL 拼进命令行被解释。
+#[tauri::command]
+pub fn open_external(url: String) -> AppResult<()> {
+    let parsed = reqwest::Url::parse(&url)
+        .map_err(|_| AppError::new("external.invalid_url", "链接格式不正确"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(AppError::new(
+            "external.scheme",
+            "只允许打开 http/https 链接",
+        ));
+    }
+    let target = parsed.as_str().to_string();
+    #[cfg(target_os = "linux")]
+    let (program, args) = ("xdg-open", vec![target.clone()]);
+    #[cfg(target_os = "windows")]
+    let (program, args) = (
+        "rundll32.exe",
+        vec!["url.dll,FileProtocolHandler".to_string(), target.clone()],
+    );
+    #[cfg(target_os = "macos")]
+    let (program, args) = ("open", vec![target.clone()]);
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+    let (program, args) = ("xdg-open", vec![target.clone()]);
+
+    std::process::Command::new(program)
+        .args(args)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| AppError::new("external.spawn_failed", format!("打开链接失败：{e}")))
 }

@@ -5,20 +5,34 @@ use std::time::Duration;
 use tauri::Manager;
 
 use crate::app::settings::SettingsStore;
+use crate::known_hosts::KnownHosts;
+use crate::monitor::MonitorManager;
 use crate::profile::ProfileStore;
 use crate::serial::SerialManager;
+use crate::session::local::LocalManager;
 use crate::session::manager::SshManager;
+use crate::transport::rdp::RdpManager;
 use crate::transport::sftp::SftpManager;
+use crate::transport::telnet::TelnetManager;
+use crate::transport::vnc::VncManager;
+use crate::tunnel::TunnelManager;
 use crate::vault::Vault;
 
 pub struct AppState {
     pub data_dir: PathBuf,
     pub vault: Arc<Vault>,
     pub profiles: Arc<ProfileStore>,
+    pub known_hosts: Arc<KnownHosts>,
     pub settings: Arc<SettingsStore>,
+    pub local: LocalManager,
     pub ssh: SshManager,
     pub serial: SerialManager,
     pub sftp: SftpManager,
+    pub telnet: TelnetManager,
+    pub vnc: VncManager,
+    pub rdp: RdpManager,
+    pub tunnel: TunnelManager,
+    pub monitor: MonitorManager,
     pub http: reqwest::Client,
 }
 
@@ -27,6 +41,7 @@ impl AppState {
         std::fs::create_dir_all(&data_dir).context("创建应用数据目录失败")?;
         let vault = Arc::new(Vault::open(&data_dir)?);
         let profiles = Arc::new(ProfileStore::open(&data_dir)?);
+        let known_hosts = Arc::new(KnownHosts::open(&data_dir)?);
         let settings = Arc::new(SettingsStore::open(&data_dir)?);
         let http = reqwest::Client::builder()
             .user_agent("FanSSH/1.0")
@@ -38,10 +53,17 @@ impl AppState {
             data_dir,
             vault,
             profiles,
+            known_hosts,
             settings,
+            local: LocalManager::default(),
             ssh: SshManager::default(),
             serial: SerialManager::default(),
             sftp: SftpManager::default(),
+            telnet: TelnetManager::default(),
+            vnc: VncManager::default(),
+            rdp: RdpManager::default(),
+            tunnel: TunnelManager::default(),
+            monitor: MonitorManager::default(),
             http,
         })
     }

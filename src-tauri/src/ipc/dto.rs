@@ -7,7 +7,9 @@ use crate::session::model::ChatMessage;
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum SessionState {
     Connecting,
+    VerifyingHost,
     Authenticating,
+    OpeningShell,
     Ready,
     Closed { reason: String },
 }
@@ -34,6 +36,131 @@ pub enum TermEvent {
         code: String,
         message: String,
     },
+    HostKeyPrompt {
+        prompt_id: Uuid,
+        host: String,
+        port: u16,
+        algorithm: String,
+        fingerprint: String,
+    },
+    /// 键盘交互认证：把服务端 prompt 交给前端，等待用户输入后继续。
+    AuthPrompt {
+        prompt_id: Uuid,
+        name: String,
+        instructions: String,
+        prompts: Vec<AuthPromptItem>,
+    },
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct AuthPromptItem {
+    pub prompt: String,
+    pub echo: bool,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TunnelState {
+    Starting,
+    Running,
+    Stopped,
+    Error,
+}
+
+/// 端口转发状态事件，按路由 id 上报。
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TunnelEvent {
+    State {
+        route_id: Uuid,
+        state: TunnelState,
+        /// 实际监听端口；本地端口填 0 时由系统分配。
+        port: Option<u16>,
+        message: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VncState {
+    Connecting,
+    Ready,
+    Closed,
+    Error,
+}
+
+/// VNC 控制事件；画面数据单独走原始字节通道。
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum VncEvent {
+    State {
+        state: VncState,
+        message: Option<String>,
+    },
+    Size {
+        width: u16,
+        height: u16,
+        name: String,
+    },
+    CopyRect {
+        x: u16,
+        y: u16,
+        width: u16,
+        height: u16,
+        src_x: u16,
+        src_y: u16,
+    },
+    Clipboard {
+        text: String,
+        from_server: bool,
+    },
+    Bell,
+    Exit {
+        reason: Option<String>,
+    },
+}
+
+/// 前端发来的 VNC 输入。
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum VncInputDto {
+    Pointer { mask: u8, x: u16, y: u16 },
+    Key { down: bool, keysym: u32 },
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RdpState {
+    Connecting,
+    Ready,
+    Closed,
+    Error,
+}
+
+/// 内嵌 RDP 控制事件；画面数据单独走原始字节通道（8 字节头 + RGBA）。
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RdpEvent {
+    State {
+        state: RdpState,
+        message: Option<String>,
+    },
+    Size {
+        width: u16,
+        height: u16,
+        name: String,
+    },
+    Exit {
+        reason: Option<String>,
+    },
+}
+
+/// 前端发来的 RDP 输入。键盘使用 PC 扫描码，扩展键用 0xE000 高位标记。
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RdpInputDto {
+    Pointer { mask: u8, x: u16, y: u16 },
+    Key { down: bool, scancode: u16 },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -44,6 +171,15 @@ pub enum TransferEvent {
         name: String,
         direction: String,
         total: u64,
+        resumed: u64,
+        remote_path: String,
+        local_path: Option<String>,
+        conflict: String,
+    },
+    Skipped {
+        id: Uuid,
+        name: String,
+        direction: String,
     },
     Progress {
         id: Uuid,
@@ -82,6 +218,21 @@ pub struct RemoteEntry {
 pub struct SftpOpenResp {
     pub sftp_id: Uuid,
     pub home: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SftpTextFile {
+    pub content: String,
+    pub mtime: Option<u32>,
+    pub mode: Option<u32>,
+    pub size: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SftpOpResult {
+    pub path: String,
+    pub ok: bool,
+    pub error: Option<String>,
 }
 
 /// 系统串口枚举结果。`description` 带上厂商/产品/序列号，便于区分同型号设备。
@@ -161,12 +312,6 @@ pub struct AiChatRequest {
     pub context: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
-pub struct RdpHandleDto {
-    pub pid: Option<u32>,
-    pub rdp_file: String,
-}
-
 // ---------------------------------------------------------------------------
 // 自动更新
 // ---------------------------------------------------------------------------
@@ -178,10 +323,14 @@ pub struct UpdaterStatusDto {
     pub current_version: String,
     /// 实际使用的更新源地址（来自 tauri.conf.json）
     pub endpoint: String,
-    /// 更新通道的 Releases 页面，便携版据此提示下载新包
+    /// 更新通道的 Releases 页面，便携版与 deb 安装版据此提示下载新包
     pub channel_url: String,
     /// 便携版不执行自更新，只提示去下载新 zip
     pub portable: bool,
+    /// 运行时形态：windows（安装版）、portable（便携版）、appimage、deb、macos、other
+    pub runtime: String,
+    /// 当前安装方式是否支持应用内下载并替换镜像（Windows 安装版与 AppImage）
+    pub self_update: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -199,9 +348,6 @@ pub struct UpdateInfoDto {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UpdateEvent {
     Downloading,
-    Progress {
-        downloaded: u64,
-        total: Option<u64>,
-    },
+    Progress { downloaded: u64, total: Option<u64> },
     Installed,
 }

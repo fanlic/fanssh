@@ -1,6 +1,8 @@
 // 与 Rust 侧 serde 模型保持一致的类型定义。
 
-export type Protocol = "ssh" | "rdp" | "serial";
+export type LocalShell = "system" | "power_shell" | "cmd";
+
+export type Protocol = "ssh" | "rdp" | "serial" | "telnet" | "tunnel" | "vnc";
 export type SecretKind = "password" | "private_key" | "passphrase" | "token";
 
 export interface Target {
@@ -12,6 +14,7 @@ export interface Target {
 export type AuthRef =
   | { kind: "password"; secret: string }
   | { kind: "key"; key: string; passphrase?: string | null }
+  | { kind: "keyboard_interactive" }
   | { kind: "none" };
 
 export interface JumpHop {
@@ -52,10 +55,122 @@ export interface SerialPrefs {
   newline: SerialNewline;
 }
 
+export interface EnvVar {
+  key: string;
+  value: string;
+}
+
+/** SSH 连接扩展参数，与凭据无关，随 profile 持久化。 */
+export interface SshPrefs {
+  timeout_ms: number;
+  keepalive_ms: number;
+  encoding?: string | null;
+  terminal_type?: string | null;
+  proxy?: string | null;
+  proxy_disabled: boolean;
+  init_command?: string | null;
+  default_path?: string | null;
+  keepalive_command?: string | null;
+  keepalive_command_ms: number;
+  env: EnvVar[];
+  monitor_disabled: boolean;
+  disable_pwd_jump: boolean;
+  x11: boolean;
+  x11_cookie?: string | null;
+  host_key_algorithms?: string | null;
+  ciphers?: string | null;
+  kex_algorithms?: string | null;
+}
+
 export interface ProfileOptions {
   rdp?: RdpPrefs | null;
   serial?: SerialPrefs | null;
+  ssh?: SshPrefs | null;
+  telnet?: TelnetPrefs | null;
+  tunnel?: TunnelPrefs | null;
+  vnc?: VncPrefs | null;
 }
+
+/** VNC 连接参数。auth_method: vnc = VNC 密码，none = 无认证。 */
+export interface VncPrefs {
+  auth_method: "vnc" | "none";
+  read_only: boolean;
+  shared: boolean;
+  scale_viewport: boolean;
+  crop_viewport: boolean;
+  quality: number;
+  compression: number;
+}
+
+export type VncState = "connecting" | "ready" | "closed" | "error";
+
+export type VncEvent =
+  | { type: "state"; state: VncState; message: string | null }
+  | { type: "size"; width: number; height: number; name: string }
+  | {
+      type: "copy_rect";
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      src_x: number;
+      src_y: number;
+    }
+  | { type: "clipboard"; text: string; from_server: boolean }
+  | { type: "bell" }
+  | { type: "exit"; reason: string | null };
+
+export type VncInput =
+  | { type: "pointer"; mask: number; x: number; y: number }
+  | { type: "key"; down: boolean; keysym: number };
+
+export type RdpState = "connecting" | "ready" | "closed" | "error";
+
+/** 内嵌 RDP 事件；画面数据走独立的原始字节通道。 */
+export type RdpEvent =
+  | { type: "state"; state: RdpState; message: string | null }
+  | { type: "size"; width: number; height: number; name: string }
+  | { type: "exit"; reason: string | null };
+
+/** mask 与 VNC 一致：1 左键、2 中键、4 右键、8 上滚、16 下滚。 */
+export type RdpInput =
+  | { type: "pointer"; mask: number; x: number; y: number }
+  | { type: "key"; down: boolean; scancode: number };
+
+/** Telnet 按键映射；标准模式不做任何转换。 */
+export interface TelnetPrefs {
+  enable_mapping: boolean;
+  mapping_preset: string;
+}
+
+export type TunnelKind = "local" | "remote" | "dynamic";
+
+/** 一条转发路由。local_* 对本地/动态转发是本机监听，对远程转发是服务器监听。 */
+export interface TunnelRoute {
+  id: string;
+  kind: TunnelKind;
+  local_host: string;
+  local_port: number;
+  remote_host: string;
+  remote_port: number;
+}
+
+/** 隧道配置：服务器引用已有 SSH 配置，凭据仍保存在该 SSH 配置的 vault 引用里。 */
+export interface TunnelPrefs {
+  server_id: string | null;
+  auto_reconnect: boolean;
+  routes: TunnelRoute[];
+}
+
+export type TunnelState = "starting" | "running" | "stopped" | "error";
+
+export type TunnelEvent = {
+  type: "state";
+  route_id: string;
+  state: TunnelState;
+  port: number | null;
+  message: string | null;
+};
 
 /** 系统串口枚举结果；description 含厂商/产品/序列号，便于区分同型号设备。 */
 export interface SerialPortInfo {
@@ -82,10 +197,29 @@ export interface DockerLogs {
   truncated: boolean;
 }
 
+/** 服务器监控：一次采样的快照。容量单位为字节，速率为字节/秒。 */
+export interface HostMetrics {
+  ts: number;
+  uptime: number;
+  load1: number;
+  load5: number;
+  load15: number;
+  cpu: { usage: number; cores: number[] };
+  mem: { total: number; used: number; cached: number; free: number };
+  disks: Array<{ mount: string; total: number; used: number }>;
+  net: { rx_bps: number; tx_bps: number };
+  platform: string;
+}
+
+export type MonitorEvent =
+  | { type: "metrics"; metrics: HostMetrics }
+  | { type: "error"; code: string; message: string };
+
 export interface Profile {
   id: string;
   name: string;
   group?: string | null;
+  remark?: string | null;
   protocol: Protocol;
   target: Target;
   auth: AuthRef;
@@ -102,16 +236,40 @@ export interface SecretRef {
 }
 
 export interface SessionState {
-  state: "connecting" | "authenticating" | "ready" | "closed";
+  state: "connecting" | "verifying_host" | "authenticating" | "opening_shell" | "ready" | "closed";
   reason?: string;
 }
 
+export interface AuthPromptItem {
+  prompt: string;
+  echo: boolean;
+}
+
+export interface HostKeyPrompt {
+  type: "host_key_prompt";
+  prompt_id: string;
+  host: string;
+  port: number;
+  algorithm: string;
+  fingerprint: string;
+}
+
+export type HostKeyDecision = "once" | "save" | "cancel";
+
 export type TermEvent =
+  | HostKeyPrompt
   | { type: "state"; state: SessionState }
   | { type: "data"; seq: number; text: string }
   | { type: "title"; title: string }
   | { type: "exit"; code: number | null; reason: string | null }
-  | { type: "error"; code: string; message: string };
+  | { type: "error"; code: string; message: string }
+  | {
+      type: "auth_prompt";
+      prompt_id: string;
+      name: string;
+      instructions: string;
+      prompts: AuthPromptItem[];
+    };
 
 export interface RemoteEntry {
   name: string;
@@ -128,8 +286,34 @@ export interface SftpOpenResp {
   home: string;
 }
 
+export interface SftpTextFile {
+  content: string;
+  mtime: number | null;
+  mode: number | null;
+  size: number;
+}
+
+export interface SftpOpResult {
+  path: string;
+  ok: boolean;
+  error: string | null;
+}
+
+export type SftpConflict = "overwrite" | "skip" | "rename";
+
 export type TransferEvent =
-  | { type: "start"; id: string; name: string; direction: string; total: number }
+  | {
+      type: "start";
+      id: string;
+      name: string;
+      direction: string;
+      total: number;
+      resumed: number;
+      remote_path: string;
+      local_path: string | null;
+      conflict: string;
+    }
+  | { type: "skipped"; id: string; name: string; direction: string }
   | {
       type: "progress";
       id: string;
@@ -183,16 +367,15 @@ export interface ChatMessage {
   content: string;
 }
 
-export interface RdpHandleDto {
-  pid: number | null;
-  rdp_file: string;
-}
-
 export interface UpdaterStatus {
   currentVersion: string;
   endpoint: string;
   channelUrl: string;
   portable: boolean;
+  /** 运行时形态：windows / portable / appimage / deb / macos / other */
+  runtime: string;
+  /** 当前安装方式是否支持应用内自更新 */
+  selfUpdate: boolean;
 }
 
 export interface UpdateInfo {
@@ -214,4 +397,66 @@ export interface AppErrorShape {
   message: string;
   detail?: string | null;
   retryable?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// 界面设置（与 Rust UiSettings 字段保持一致，snake_case）
+// ---------------------------------------------------------------------------
+
+export interface AppearanceSettings {
+  preset: string;
+  theme_color: string;
+  background_color: string;
+  nav_color: string;
+  follow_system: boolean;
+  system_font: string;
+}
+
+export type TerminalWeight = "normal" | "300" | "400" | "500" | "600" | "bold";
+export type CursorStyle = "bar" | "block" | "underline";
+export type InactiveCursorStyle = "none" | "outline" | "block" | "bar" | "underline";
+export type QuickInputMode = "floating" | "hidden" | "fixed";
+export type RightClickBehavior = "menu" | "paste";
+
+export interface TerminalUiSettings {
+  font_family: string;
+  normal_weight: string;
+  bold_weight: string;
+  scrollback: number;
+  font_size: number;
+  line_height: number;
+  letter_spacing: number;
+  cursor_blink: boolean;
+  cursor_style: CursorStyle | string;
+  inactive_cursor_style: InactiveCursorStyle | string;
+  quick_input: QuickInputMode | string;
+  wheel_zoom: boolean;
+  copy_on_select: boolean;
+  right_click: RightClickBehavior | string;
+}
+
+export interface ShortcutSettings {
+  open_settings: string;
+  global_search: string;
+  next_tab: string;
+  prev_tab: string;
+  close_tab: string;
+  zoom_in: string;
+  zoom_out: string;
+  toggle_sidebar: string;
+}
+
+export interface KnownHostEntry {
+  host: string;
+  port: number;
+  algorithm: string;
+  fingerprint: string;
+  first_seen: number;
+  last_seen: number;
+}
+
+export interface UiSettings {
+  appearance: AppearanceSettings;
+  terminal: TerminalUiSettings;
+  shortcuts: ShortcutSettings;
 }

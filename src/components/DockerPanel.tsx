@@ -127,13 +127,7 @@ export function DockerPanel({ profile, sessionId, paneReady, onClose, onOpenShel
   const logsHint = errorHint(logsCode);
 
   return (
-    <div
-      className="drawer-mask"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <aside className="drawer docker-drawer" aria-label="Docker 管理">
+      <aside className="side-panel docker-panel" aria-label="Docker 管理">
         <header className="drawer-head">
           <div className="dh-main">
             <div className="dh-title">
@@ -281,6 +275,5 @@ export function DockerPanel({ profile, sessionId, paneReady, onClose, onOpenShel
           )}
         </div>
       </aside>
-    </div>
   );
 }

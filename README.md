@@ -2,7 +2,7 @@
 
 面向运维人员和开发者的桌面终端与运维客户端（v1 可运行骨架），主要面向 Windows，同时提供 Linux 构建。
 
-技术栈：Tauri 2（Rust 后端）+ React 18 + TypeScript + xterm.js，SSH/SFTP 基于 russh，凭据在 Windows 下使用 DPAPI 加密，RDP 调用系统 `mstsc.exe`。
+技术栈：Tauri 2（Rust 后端）+ React 18 + TypeScript + xterm.js，SSH/SFTP 基于 russh，RDP 基于 IronRDP，凭据在 Windows 下使用 DPAPI 加密。
 
 ## 当前已实现
 
@@ -11,17 +11,17 @@
 - **凭据存储**：Windows 下用 DPAPI 包装主密钥，每条凭据再用 AES-256-GCM 做信封加密；Linux 下改用数据目录中的主密钥文件（见下方「Linux 版本」）。
 - **SFTP**：远程目录浏览、上传、下载、chmod，带传输进度队列（最小可用）。
 - **AI 侧边栏**：支持 Ollama 或 OpenAI 兼容接口；把终端选中内容发给模型分析；自然语言转 Shell 命令，结果经本地风险规则评估后，必须由用户确认才写入终端。
-- **RDP**：配置中可选 RDP 协议，连接时生成 `.rdp` 文件并调用 `mstsc.exe`（仅 Windows）。
+- **RDP**：配置中可选 RDP 协议，Windows / Linux 共用内嵌远程桌面；支持 NLA/CredSSP 登录、画面显示、鼠标与键盘输入，一次性密码不会写入磁盘。
 - **构建流水线**：GitHub Actions 在 Windows runner 上产出 NSIS 安装包与便携版 zip，在 Ubuntu runner 上产出 AppImage 与 deb。
 
 ## 尚未实现 / 已知限制
 
-- SSH 主机密钥目前只记录、未接入 known_hosts 校验。
+- SSH 主机密钥使用本地 `known_hosts.json` 做首次信任后校验；首次连接会自动记录，后续指纹变化会拒绝连接。
 - 终端日志高亮、全局搜索、快捷键自定义、会话录制、插件机制未实现。
 - AI 为非流式响应；NL2CMD 的本地风险规则是保守拦截，不能替代人工审查。
-- SFTP 未实现断点续传、本地双栏文件浏览、在线文本编辑。
-- RDP 仅外部调用 `mstsc.exe`，未做窗口嵌入。
-- 当前开发机为 Linux，Tauri 桌面窗口与 Windows 专属行为（DPAPI、mstsc）需在 Windows 上实际验证。
+- SFTP 未实现本地双栏文件浏览。
+- RDP 剪贴板、多显示器、音频、磁盘映射、RD 网关、智能卡登录暂未接入；服务器证书目前只用于 CredSSP 通道绑定，尚未做主机身份校验。
+- 当前开发机为 Linux，Tauri 桌面窗口与 Windows 专属行为（DPAPI、安装包）需在 Windows 上实际验证。
 
 ## 本地开发
 
@@ -98,13 +98,11 @@ npm run tauri build -- --bundles appimage,deb
   主密钥文件 `secret.key`：目录权限 `0700`、文件权限 `0600`，首次启动自动生成，
   用于 AES-256-GCM 信封加密。**安全差异**：密钥与密文同机存放，能读取当前用户数据目录的程序
   即可同时拿到密钥与密文，强度低于 DPAPI；请确保数据目录不被其他用户或其他程序读取。
-- **RDP**：依赖 Windows 的 `mstsc.exe`，Linux 下不提供 RDP 协议入口；已有 RDP 配置在 Linux 上
-  双击会明确提示「当前平台不支持」。
+- **RDP**：Linux 下使用同一套内嵌 IronRDP 会话，不依赖系统 `mstsc.exe`。
 - **串口**：Linux 普通用户默认无权打开串口设备，需要先执行
   `sudo usermod -aG dialout $USER` 并重新登录。
 - **SFTP / Docker 面板**：依赖 SSH 会话，Linux 下与 Windows 行为一致。
-- **自动更新**：Linux 版暂未接入应用内自动更新，设置页会明确提示，请下载新的 AppImage 或 deb
-  手动替换；配置与凭据在数据目录中，替换后可继续使用。
+- **自动更新**：Linux AppImage 已接入应用内更新检查；deb 仍需通过包管理器或手动下载更新。
 
 ## CI
 
@@ -181,6 +179,7 @@ npx tauri signer generate -w ~/keys/fanssh.key
 ## 数据与安全
 
 - 配置：`profiles.json`，不含任何明文密码或私钥。
+- SSH 主机密钥：`known_hosts.json`，保存 host/port、算法与 SHA256 指纹；服务器重装或换密钥后可在设置的安全页面删除对应记录再重连。
 - 凭据：`vault.json`，主密钥在 Windows 下由 DPAPI（当前用户范围）包装，Linux 下由数据目录中的 `secret.key`（目录 0700 / 文件 0600）包装；每条凭据使用 AES-256-GCM，AAD 绑定 `id:kind`。
 - AI API Key 同样存放在凭据库，不写入 `settings.json`，也不会回传到前端。
 - 数据目录优先级：环境变量 `FANSSH_DATA_DIR` → exe 同级存在 `portable.marker` 时的 `data/` → 系统应用数据目录。

@@ -1,46 +1,229 @@
 import { useEffect, useRef, useState } from "react";
 import { useAppStore } from "../store";
+import type { LocalShell, Profile } from "../types";
 import { Icon } from "./Icon";
 
 interface Props {
+  onActivate: () => void;
+  onOpenLocal: (shell: LocalShell) => void;
+  platform: string;
+  onToggleSftp: () => void;
   onSplit: () => void;
+  onOpenSearch: () => void;
+  onNew: () => void;
+  onManage: () => void;
+  onConnectProfile: (profile: Profile) => void;
 }
 
-export function TabBar({ onSplit }: Props) {
+export function TabBar({ onActivate, onOpenLocal, platform, onToggleSftp, onSplit, onOpenSearch, onNew, onManage, onConnectProfile }: Props) {
   const tabs = useAppStore((s) => s.tabs);
   const activeTabId = useAppStore((s) => s.activeTabId);
   const profiles = useAppStore((s) => s.profiles);
+  const recentProfileIds = useAppStore((s) => s.recentProfileIds);
   const setActiveTab = useAppStore((s) => s.setActiveTab);
+  const activateTab = (id: string) => {
+    setActiveTab(id);
+    onActivate();
+  };
   const closeTab = useAppStore((s) => s.closeTab);
   const closePane = useAppStore((s) => s.closePane);
-  const setSftpProfileId = useAppStore((s) => s.setSftpProfileId);
+  const moveTab = useAppStore((s) => s.moveTab);
+  const removeRecent = useAppStore((s) => s.removeRecent);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [leftOpen, setLeftOpen] = useState(false);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const leftRef = useRef<HTMLDivElement>(null);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId);
   const activePane = activeTab?.panes[activeTab.activePane] ?? null;
   const activeProfile = profiles.find((profile) => profile.id === activePane?.profileId) ?? null;
+  const recentProfiles = recentProfileIds
+    .map((id) => profiles.find((profile) => profile.id === id))
+    .filter((profile): profile is Profile => !!profile);
 
   useEffect(() => {
-    if (!menuOpen) return;
+    if (!menuOpen && !leftOpen) return;
     const onDown = (event: MouseEvent) => {
       if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+      if (!leftRef.current?.contains(event.target as Node)) setLeftOpen(false);
     };
     window.addEventListener("mousedown", onDown);
     return () => window.removeEventListener("mousedown", onDown);
-  }, [menuOpen]);
+  }, [menuOpen, leftOpen]);
 
   return (
     <div className="tabbar">
+      <div className="tab-menu-wrap" ref={leftRef}>
+        <button
+          className={`tab-menu-btn${leftOpen ? " is-on" : ""}`}
+          title="标签与连接菜单"
+          onClick={() => setLeftOpen((value) => !value)}
+        >
+          <Icon name="chev" size={12} />
+        </button>
+        {leftOpen && (
+          <div className="tab-left-menu">
+            <div className="menu-label">操作</div>
+            <button
+              className="menu-item"
+              onClick={() => {
+                setLeftOpen(false);
+                onOpenSearch();
+              }}
+            >
+              <Icon name="search" size={12} />
+              <span className="mi-name">打开搜索</span>
+              <kbd>Ctrl Shift F</kbd>
+            </button>
+            <button
+              className="menu-item"
+              onClick={() => {
+                setLeftOpen(false);
+                onNew();
+              }}
+            >
+              <Icon name="plus" size={12} />
+              <span className="mi-name">新建连接</span>
+            </button>
+            <button
+              className="menu-item"
+              onClick={() => {
+                setLeftOpen(false);
+                onManage();
+              }}
+            >
+              <Icon name="gear" size={12} />
+              <span className="mi-name">管理连接</span>
+            </button>
+
+            <div className="menu-sep" />
+            <div className="menu-label">打开控制台</div>
+            {(platform === "windows"
+              ? ([["system", "系统默认控制台"], ["power_shell", "PowerShell"], ["cmd", "CMD"]] as const)
+              : ([["system", "系统默认控制台"]] as const)
+            ).map(([shell, label]) => (
+              <button
+                key={shell}
+                className="menu-item"
+                onClick={() => {
+                  setLeftOpen(false);
+                  onOpenLocal(shell);
+                }}
+              >
+                <Icon name="term" size={12} />
+                <span className="mi-name">{label}</span>
+              </button>
+            ))}
+            <div className="menu-sep" />
+            <div className="menu-label">已打开的会话</div>
+            {tabs.length === 0 && <div className="menu-empty">暂无打开的会话</div>}
+            {tabs.map((tab) => {
+              const pane = tab.panes[tab.activePane] ?? tab.panes[0];
+              return (
+                <div
+                  key={tab.id}
+                  className={`menu-item menu-row${tab.id === activeTabId ? " is-active" : ""}`}
+                  onClick={() => {
+                    activateTab(tab.id);
+                    setLeftOpen(false);
+                  }}
+                >
+                  <span className={`dot st-${pane?.status ?? "idle"}`} />
+                  <span className="mi-name">{tab.title}</span>
+                  <span className="mi-meta">{tab.panes.length} 面板</span>
+                  <button
+                    className="mi-close"
+                    title="关闭标签页"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      closeTab(tab.id);
+                    }}
+                  >
+                    <Icon name="x" size={9} />
+                  </button>
+                </div>
+              );
+            })}
+
+            <div className="menu-sep" />
+            <div className="menu-label">最近连接</div>
+            {recentProfiles.length === 0 && <div className="menu-empty">还没有连接记录</div>}
+            {recentProfiles.map((profile) => (
+              <div
+                key={profile.id}
+                className="menu-item menu-row"
+                title={`连接到 ${profile.name}`}
+                onClick={() => {
+                  setLeftOpen(false);
+                  onConnectProfile(profile);
+                }}
+              >
+                <span className={`s-icon ${profile.protocol}`}>
+                  <Icon
+                    name={
+                      profile.protocol === "serial"
+                        ? "plug"
+                        : profile.protocol === "tunnel"
+                          ? "transfer"
+                          : "term"
+                    }
+                    size={11}
+                  />
+                </span>
+                <span className="mi-name">{profile.name}</span>
+                <button
+                  className="mi-close"
+                  title="从最近连接移除"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    removeRecent(profile.id);
+                  }}
+                >
+                  <Icon name="x" size={9} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div className="tabs">
         {tabs.map((tab) => {
           const pane = tab.panes[tab.activePane] ?? tab.panes[0];
           return (
             <div
               key={tab.id}
-              className={`tab${tab.id === activeTabId ? " is-active" : ""}`}
-              onClick={() => setActiveTab(tab.id)}
+              className={`tab${tab.id === activeTabId ? " is-active" : ""}${
+                dragId === tab.id ? " is-dragging" : ""
+              }${overId === tab.id && dragId !== tab.id ? " is-drop-target" : ""}`}
+              onClick={() => activateTab(tab.id)}
               title={tab.title}
+              draggable
+              onDragStart={(event) => {
+                setDragId(tab.id);
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData("application/x-fanssh-tab", tab.id);
+              }}
+              onDragOver={(event) => {
+                if (!dragId || dragId === tab.id) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+                setOverId(tab.id);
+              }}
+              onDrop={(event) => {
+                const from = event.dataTransfer.getData("application/x-fanssh-tab") || dragId;
+                setDragId(null);
+                setOverId(null);
+                if (!from) return;
+                event.preventDefault();
+                moveTab(from, tab.id);
+              }}
+              onDragEnd={() => {
+                setDragId(null);
+                setOverId(null);
+              }}
             >
               <span className={`dot st-${pane?.status ?? "idle"}`} />
               <span className="tab-title">{tab.title}</span>
@@ -58,6 +241,9 @@ export function TabBar({ onSplit }: Props) {
             </div>
           );
         })}
+        <button className="tab-menu-btn" title="新建本地终端标签" onClick={() => onOpenLocal("system")}>
+          <Icon name="plus" size={14} />
+        </button>
       </div>
 
       {activeTab && (
@@ -84,7 +270,7 @@ export function TabBar({ onSplit }: Props) {
             <button
               className="icon-btn sm"
               title="SFTP 文件传输"
-              onClick={() => setSftpProfileId(activeProfile.id)}
+              onClick={onToggleSftp}
             >
               <Icon name="transfer" size={14} />
             </button>
@@ -105,7 +291,7 @@ export function TabBar({ onSplit }: Props) {
                     key={tab.id}
                     className={`menu-item${tab.id === activeTabId ? " is-active" : ""}`}
                     onClick={() => {
-                      setActiveTab(tab.id);
+                      activateTab(tab.id);
                       setMenuOpen(false);
                     }}
                   >

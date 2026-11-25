@@ -98,7 +98,7 @@ jobs:
           $conf = Get-Content "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
           $version = $conf.version
           # 资产发布在公开更新通道仓库，tag 即版本号
-          $assetUrl = "https://github.com/${{ vars.UPDATES_REPO || 'fanlic/fanssh-updates' }}/releases/download/$version/$($exe.Name)"
+          $assetUrl = "https://github.com/${{ github.repository }}/releases/download/v$version/$($exe.Name)"
           $notes = "FanSSH $version。安装版可在应用内「设置 → 检查更新」升级；便携版请下载新的便携包。"
           $latest = [ordered]@{
             version   = $version
@@ -138,6 +138,8 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: read
+    env:
+      HAS_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
 
     steps:
       - name: Checkout
@@ -183,7 +185,17 @@ jobs:
       - name: Type check & build frontend
         run: npm run build
 
+      - name: Enable updater artifacts
+        if: env.HAS_SIGNING_KEY == 'true'
+        run: |
+          # Linux 侧的 AppImage 也要生成 .sig，latest.json 才能带 linux-x86_64 通道
+          jq '.bundle.createUpdaterArtifacts = true' src-tauri/tauri.conf.json > tauri.conf.tmp
+          mv tauri.conf.tmp src-tauri/tauri.conf.json
+
       - name: Build Tauri bundle (AppImage + deb)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build -- --bundles appimage,deb
 
       - name: Verify build artifacts
@@ -198,6 +210,14 @@ jobs:
           path: src-tauri/target/release/bundle/appimage/*.AppImage
           if-no-files-found: error
 
+      - name: Upload AppImage signature
+        if: env.HAS_SIGNING_KEY == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fanssh-linux-appimage-sig
+          path: src-tauri/target/release/bundle/appimage/*.AppImage.sig
+          if-no-files-found: error
+
       - name: Upload deb
         uses: actions/upload-artifact@v4
         with:
@@ -208,7 +228,8 @@ jobs:
   release:
     name: Attach artifacts to GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build-windows
+    # 需要两边的签名产物：Windows 的 latest.json 与 Linux 的 AppImage.sig 合并成一份清单
+    needs: [build-windows, build-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -226,30 +247,19 @@ jobs:
         if: env.HAS_SIGNING_KEY == 'true'
         run: echo "version=$(jq -r .version dist-artifacts/fanssh-latest-json/latest.json)" >> "$GITHUB_OUTPUT"
 
-      - name: Publish to update channel
-        if: env.HAS_SIGNING_KEY == 'true' && env.HAS_UPDATES_TOKEN == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          repository: ${{ vars.UPDATES_REPO || 'fanlic/fanssh-updates' }}
-          token: ${{ secrets.UPDATES_TOKEN }}
-          tag_name: ${{ steps.meta.outputs.version }}
-          name: FanSSH ${{ steps.meta.outputs.version }}
-          body: |
-            FanSSH ${{ steps.meta.outputs.version }} 更新通道。
-
-            这里只放安装包、便携包和自动更新用的 `latest.json`，源码见 fanlic/fanssh。
-
-            - 安装包 `FanSSH_*_x64-setup.exe`：已安装用户无需手动下载，应用内「设置 → 检查更新」即可升级。
-            - 便携包 `FanSSH-portable-windows-x64.zip`：便携版不支持自更新，请下载新版 zip 解压覆盖。
-            - `latest.json`：自动更新清单，客户端固定从这里读取。
-
-            构建未做代码签名，首次运行可能出现 SmartScreen 提示，选择“更多信息 → 仍要运行”。
-          files: |
-            dist-artifacts/fanssh-nsis-installer/*.exe
-            dist-artifacts/fanssh-portable-windows-x64/*.zip
-            dist-artifacts/fanssh-latest-json/latest.json
-          draft: false
-          make_latest: true
+      - name: Add Linux platform to latest.json
+        if: env.HAS_SIGNING_KEY == 'true'
+        run: |
+          set -euo pipefail
+          version=$(jq -r .version dist-artifacts/fanssh-latest-json/latest.json)
+          appimage=$(basename dist-artifacts/fanssh-linux-appimage/*.AppImage)
+          sig=$(tr -d '\n' < dist-artifacts/fanssh-linux-appimage-sig/*.AppImage.sig)
+          base="https://github.com/${{ github.repository }}/releases/download/v${version}"
+          # 只追加 linux-x86_64 一项，Windows 的字段沿用 Windows 构建产物里的原值
+          jq --arg sig "$sig" --arg url "${base}/${appimage}" \
+            '.platforms["linux-x86_64"] = { signature: $sig, url: $url }' \
+            dist-artifacts/fanssh-latest-json/latest.json > latest.json
+          cat latest.json
 
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
@@ -281,35 +291,15 @@ jobs:
 
             ## 本版本状态
 
-            这是 v1 骨架的首个可运行构建：SSH 终端、会话管理、SFTP、AI 侧边栏、RDP 调用均已实现；
-            仍存在已知缺口（SSH 未接 known_hosts、AI 非流式、SFTP 无断点续传等），详见仓库 README。
+            这是 v1 骨架的预览构建：SSH 终端、会话管理、SFTP、AI 侧边栏、内嵌 RDP 均已接入；
+            仍存在已知缺口（SSH 未接 known_hosts、AI 非流式、RDP 剪贴板/多显示器/音频暂未接入等），详见仓库 README。
           files: |
             dist-artifacts/fanssh-nsis-installer/*.exe
             dist-artifacts/fanssh-portable-windows-x64/*.zip
-          draft: false
-          generate_release_notes: true
-
-  release-linux:
-    name: Attach Linux artifacts to GitHub Release
-    if: startsWith(github.ref, 'refs/tags/v')
-    # 等 Windows release 建好 Release 后再追加 Linux 资产，避免两个 job 同时创建同一个 Release。
-    needs: [build-linux, release]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist-artifacts
-
-      - name: Publish Linux assets
-        uses: softprops/action-gh-release@v2
-        with:
-          name: FanSSH ${{ github.ref_name }}
-          files: |
             dist-artifacts/fanssh-linux-appimage/*.AppImage
+            dist-artifacts/fanssh-linux-appimage-sig/*.AppImage.sig
             dist-artifacts/fanssh-linux-deb/*.deb
+            latest.json
           draft: false
-          make_latest: false
-
+          make_latest: true
+          generate_release_notes: true

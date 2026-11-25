@@ -1,41 +1,231 @@
 use anyhow::{anyhow, bail, Context, Result};
-use russh::client::{self, Handle};
+use russh::client::{self, Handle, KeyboardInteractiveAuthResponse};
 use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
+use russh::{Channel, ChannelOpenFailure};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use tauri::ipc::Channel as TauriChannel;
+use tokio::sync::{mpsc, oneshot, Mutex, Notify};
+use uuid::Uuid;
 
+use crate::ipc::dto::{AuthPromptItem, SessionState, TermEvent};
+use crate::known_hosts::KnownHosts;
 use crate::session::model::{AuthRef, Profile, Target};
+use crate::transport::proxy;
 use crate::vault::Vault;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
-const AUTH_TIMEOUT: Duration = Duration::from_secs(20);
+const AUTH_TIMEOUT: Duration = Duration::from_secs(180);
+/// 交互认证等待用户输入的最长时间。
+const AUTH_PROMPT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// 键盘交互认证的等待队列。以随机 prompt_id 为键，前端提交后唤醒对应等待。
+#[derive(Clone, Default)]
+pub struct AuthPrompts {
+    pending: Arc<Mutex<HashMap<Uuid, oneshot::Sender<Option<Vec<String>>>>>>,
+    host_keys: Arc<Mutex<HashMap<Uuid, oneshot::Sender<HostKeyDecision>>>>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostKeyDecision {
+    Cancel,
+    Once,
+    Save,
+}
+
+impl AuthPrompts {
+    async fn ask(
+        &self,
+        on_event: &TauriChannel<TermEvent>,
+        name: String,
+        instructions: String,
+        prompts: Vec<russh::client::Prompt>,
+    ) -> Result<Vec<String>> {
+        let prompt_id = Uuid::new_v4();
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().await.insert(prompt_id, tx);
+        let _ = on_event.send(TermEvent::AuthPrompt {
+            prompt_id,
+            name,
+            instructions,
+            prompts: prompts
+                .iter()
+                .map(|item| AuthPromptItem {
+                    prompt: item.prompt.clone(),
+                    echo: item.echo,
+                })
+                .collect(),
+        });
+        match tokio::time::timeout(AUTH_PROMPT_TIMEOUT, rx).await {
+            Ok(Ok(Some(responses))) => Ok(responses),
+            Ok(Ok(None)) => bail!("已取消键盘交互认证"),
+            Ok(Err(_)) => bail!("交互认证会话已关闭"),
+            Err(_) => {
+                self.pending.lock().await.remove(&prompt_id);
+                bail!(
+                    "等待交互认证输入超时（{} 秒）",
+                    AUTH_PROMPT_TIMEOUT.as_secs()
+                )
+            }
+        }
+    }
+
+    pub async fn respond_host_key(&self, prompt_id: Uuid, decision: HostKeyDecision) -> bool {
+        self.host_keys
+            .lock()
+            .await
+            .remove(&prompt_id)
+            .is_some_and(|sender| sender.send(decision).is_ok())
+    }
+
+    /// 前端提交或取消。返回 false 表示没有匹配的等待项（可能已超时）。
+    pub async fn respond(&self, prompt_id: Uuid, responses: Option<Vec<String>>) -> bool {
+        let mut guard = self.pending.lock().await;
+        match guard.remove(&prompt_id) {
+            Some(tx) => {
+                let _ = tx.send(responses);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct AuthUi<'a> {
+    pub prompts: &'a AuthPrompts,
+    pub on_event: &'a TauriChannel<TermEvent>,
+}
 
 pub struct ClientHandler {
     label: String,
+    host: String,
+    port: u16,
+    known_hosts: Arc<KnownHosts>,
+    host_key_ui: Option<(AuthPrompts, TauriChannel<TermEvent>, Arc<Notify>)>,
+    accepted_key: Option<(String, String)>,
+    /// 远程端口转发：服务端每接受一个连接就打开 forwarded-tcpip 通道，
+    /// 这里接受通道后交给隧道任务处理。没有隧道时直接拒绝。
+    forward_tx: Option<mpsc::UnboundedSender<Channel<russh::client::Msg>>>,
 }
 
 impl ClientHandler {
-    fn new(label: impl Into<String>) -> Self {
+    fn new(
+        target: &Target,
+        known_hosts: Arc<KnownHosts>,
+        forward_tx: Option<mpsc::UnboundedSender<Channel<russh::client::Msg>>>,
+        host_key_ui: Option<(AuthPrompts, TauriChannel<TermEvent>, Arc<Notify>)>,
+    ) -> Self {
         Self {
-            label: label.into(),
+            label: format!("{}:{}", target.host, target.port),
+            host: target.host.clone(),
+            port: target.port,
+            known_hosts,
+            host_key_ui,
+            accepted_key: None,
+            forward_tx,
         }
     }
 }
 
 impl client::Handler for ClientHandler {
-    type Error = russh::Error;
+    type Error = anyhow::Error;
 
     async fn check_server_key(
         &mut self,
         server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
-        // v1 骨架：接受并记录主机密钥，尚未实现 known_hosts 持久化校验。
+        let key = server_public_key.public_key();
+        let algorithm = key.algorithm().as_str().to_string();
+        let fingerprint = key.fingerprint(Default::default()).to_string();
+        if let Some((previous_algorithm, previous_fingerprint)) = &self.accepted_key {
+            return Ok(previous_algorithm == &algorithm && previous_fingerprint == &fingerprint);
+        }
+
+        if let Some((_, events, _)) = &self.host_key_ui {
+            let _ = events.send(TermEvent::State {
+                state: SessionState::VerifyingHost,
+            });
+        }
+        if !self
+            .known_hosts
+            .verify(&self.host, self.port, &algorithm, &fingerprint, false)?
+        {
+            let Some((prompts, events, waiting)) = &self.host_key_ui else {
+                bail!(
+                    "尚未信任 SSH 主机 {}。请先打开 SSH 会话并确认主机指纹。",
+                    self.label
+                );
+            };
+            let prompt_id = Uuid::new_v4();
+            let (sender, response) = oneshot::channel();
+            prompts.host_keys.lock().await.insert(prompt_id, sender);
+            waiting.notify_one();
+            let dispatched = events.send(TermEvent::HostKeyPrompt {
+                prompt_id,
+                host: self.host.clone(),
+                port: self.port,
+                algorithm: algorithm.clone(),
+                fingerprint: fingerprint.clone(),
+            });
+            if dispatched.is_err() {
+                prompts.host_keys.lock().await.remove(&prompt_id);
+                bail!("无法显示 SSH 主机指纹确认");
+            }
+            let decision = tokio::time::timeout(AUTH_PROMPT_TIMEOUT, response).await;
+            prompts.host_keys.lock().await.remove(&prompt_id);
+            let save = match decision {
+                Ok(Ok(HostKeyDecision::Save)) => true,
+                Ok(Ok(HostKeyDecision::Once)) => false,
+                Ok(_) => bail!("已取消 SSH 主机指纹确认"),
+                Err(_) => bail!("等待 SSH 主机指纹确认超时"),
+            };
+            // Recheck under the store lock in case a concurrent connection saved a key.
+            self.known_hosts
+                .verify(&self.host, self.port, &algorithm, &fingerprint, save)?;
+        }
+        self.accepted_key = Some((algorithm.clone(), fingerprint.clone()));
         log::info!(
-            "[ssh] {} 主机密钥: {:?}",
+            "[ssh] {} 主机密钥已验证: {} {}",
             self.label,
-            server_public_key
+            algorithm,
+            fingerprint
         );
         Ok(true)
+    }
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: Channel<russh::client::Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        originator_address: &str,
+        originator_port: u32,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        match self.forward_tx.as_ref() {
+            Some(tx) => {
+                reply.accept().await;
+                log::info!(
+                    "[ssh] {} 转发连接 {}:{} <- {}:{}",
+                    self.label,
+                    connected_address,
+                    connected_port,
+                    originator_address,
+                    originator_port
+                );
+                let _ = tx.send(channel);
+            }
+            None => {
+                reply
+                    .reject(ChannelOpenFailure::AdministrativelyProhibited)
+                    .await;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -46,10 +236,33 @@ pub struct ConnectedSsh {
     pub _intermediates: Vec<Handle<ClientHandler>>,
 }
 
-pub async fn connect_profile(profile: &Profile, vault: &Vault) -> Result<ConnectedSsh> {
+pub async fn connect_profile(
+    profile: &Profile,
+    vault: &Vault,
+    known_hosts: Arc<KnownHosts>,
+    auth_ui: Option<AuthUi<'_>>,
+) -> Result<ConnectedSsh> {
+    connect_profile_with_forward(profile, vault, known_hosts, auth_ui, None).await
+}
+
+/// 与 `connect_profile` 相同，额外把服务端打开的远程转发通道交给 `forward_tx`。
+pub async fn connect_profile_with_forward(
+    profile: &Profile,
+    vault: &Vault,
+    known_hosts: Arc<KnownHosts>,
+    auth_ui: Option<AuthUi<'_>>,
+    forward_tx: Option<mpsc::UnboundedSender<Channel<russh::client::Msg>>>,
+) -> Result<ConnectedSsh> {
+    let prefs = profile.ssh_prefs();
+    let timeout = Duration::from_millis(prefs.timeout_ms.max(1000));
+    let keepalive = if prefs.keepalive_ms == 0 {
+        None
+    } else {
+        Some(Duration::from_millis(prefs.keepalive_ms))
+    };
     let config = Arc::new(client::Config {
         inactivity_timeout: Some(Duration::from_secs(900)),
-        keepalive_interval: Some(Duration::from_secs(30)),
+        keepalive_interval: keepalive,
         keepalive_max: 3,
         nodelay: true,
         window_size: 2 * 1024 * 1024,
@@ -61,16 +274,20 @@ pub async fn connect_profile(profile: &Profile, vault: &Vault) -> Result<Connect
     let mut handle: Handle<ClientHandler>;
 
     if let Some(first) = profile.jump.first() {
-        handle = ssh_timeout(
+        let stream =
+            proxy::tcp_connect(&first.target.host, first.target.port, &prefs, timeout).await?;
+        handle = connect_stream_timeout(
+            config.clone(),
+            stream,
+            &first.target,
+            known_hosts.clone(),
+            timeout,
             "连接跳板机",
-            client::connect(
-                config.clone(),
-                (first.target.host.clone(), first.target.port),
-                ClientHandler::new(&first.target.host),
-            ),
+            forward_tx.clone(),
+            auth_ui,
         )
         .await?;
-        auth_with_timeout(&mut handle, &first.target, &first.auth, vault).await?;
+        auth_with_timeout(&mut handle, &first.target, &first.auth, vault, auth_ui).await?;
 
         for hop in profile.jump.iter().skip(1) {
             let channel = ssh_timeout(
@@ -83,16 +300,18 @@ pub async fn connect_profile(profile: &Profile, vault: &Vault) -> Result<Connect
                 ),
             )
             .await?;
-            let mut next = ssh_timeout(
+            let mut next = connect_stream_timeout(
+                config.clone(),
+                channel.into_stream(),
+                &hop.target,
+                known_hosts.clone(),
+                timeout,
                 "通过跳板建立连接",
-                client::connect_stream(
-                    config.clone(),
-                    channel.into_stream(),
-                    ClientHandler::new(&hop.target.host),
-                ),
+                forward_tx.clone(),
+                auth_ui,
             )
             .await?;
-            auth_with_timeout(&mut next, &hop.target, &hop.auth, vault).await?;
+            auth_with_timeout(&mut next, &hop.target, &hop.auth, vault, auth_ui).await?;
             intermediates.push(handle);
             handle = next;
         }
@@ -107,29 +326,35 @@ pub async fn connect_profile(profile: &Profile, vault: &Vault) -> Result<Connect
             ),
         )
         .await?;
-        let mut next = ssh_timeout(
+        let mut next = connect_stream_timeout(
+            config.clone(),
+            channel.into_stream(),
+            &profile.target,
+            known_hosts.clone(),
+            timeout,
             "通过跳板连接目标主机",
-            client::connect_stream(
-                config.clone(),
-                channel.into_stream(),
-                ClientHandler::new(&profile.target.host),
-            ),
+            forward_tx.clone(),
+            auth_ui,
         )
         .await?;
-        auth_with_timeout(&mut next, &profile.target, &profile.auth, vault).await?;
+        auth_with_timeout(&mut next, &profile.target, &profile.auth, vault, auth_ui).await?;
         intermediates.push(handle);
         handle = next;
     } else {
-        handle = ssh_timeout(
+        let stream =
+            proxy::tcp_connect(&profile.target.host, profile.target.port, &prefs, timeout).await?;
+        handle = connect_stream_timeout(
+            config.clone(),
+            stream,
+            &profile.target,
+            known_hosts,
+            timeout,
             "建立 SSH 连接",
-            client::connect(
-                config.clone(),
-                (profile.target.host.clone(), profile.target.port),
-                ClientHandler::new(&profile.target.host),
-            ),
+            forward_tx.clone(),
+            auth_ui,
         )
         .await?;
-        auth_with_timeout(&mut handle, &profile.target, &profile.auth, vault).await?;
+        auth_with_timeout(&mut handle, &profile.target, &profile.auth, vault, auth_ui).await?;
     }
 
     Ok(ConnectedSsh {
@@ -138,15 +363,57 @@ pub async fn connect_profile(profile: &Profile, vault: &Vault) -> Result<Connect
     })
 }
 
+async fn connect_stream_timeout<S>(
+    config: Arc<client::Config>,
+    stream: S,
+    target: &Target,
+    known_hosts: Arc<KnownHosts>,
+    timeout: Duration,
+    what: &str,
+    forward_tx: Option<mpsc::UnboundedSender<Channel<russh::client::Msg>>>,
+    auth_ui: Option<AuthUi<'_>>,
+) -> Result<Handle<ClientHandler>>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let waiting = Arc::new(Notify::new());
+    let host_key_ui = auth_ui.map(|ui| (ui.prompts.clone(), ui.on_event.clone(), waiting.clone()));
+    let connection = client::connect_stream(
+        config,
+        stream,
+        ClientHandler::new(target, known_hosts, forward_tx, host_key_ui),
+    );
+    tokio::pin!(connection);
+    tokio::select! {
+        result = &mut connection => result,
+        _ = waiting.notified() => {
+            tokio::time::timeout(AUTH_PROMPT_TIMEOUT + timeout, &mut connection)
+                .await
+                .map_err(|_| anyhow!("等待 SSH 主机指纹确认超时"))?
+        }
+        _ = tokio::time::sleep(timeout) => bail!("{what}超时（{}ms）", timeout.as_millis()),
+    }
+    .with_context(|| what.to_string())
+}
+
 async fn auth_with_timeout(
     handle: &mut Handle<ClientHandler>,
     target: &Target,
     auth: &AuthRef,
     vault: &Vault,
+    auth_ui: Option<AuthUi<'_>>,
 ) -> Result<()> {
-    tokio::time::timeout(AUTH_TIMEOUT, authenticate(handle, target, auth, vault))
-        .await
-        .map_err(|_| anyhow!("认证超时（{}s）", AUTH_TIMEOUT.as_secs()))?
+    if let Some(ui) = auth_ui {
+        let _ = ui.on_event.send(TermEvent::State {
+            state: SessionState::Authenticating,
+        });
+    }
+    tokio::time::timeout(
+        AUTH_TIMEOUT,
+        authenticate(handle, target, auth, vault, auth_ui),
+    )
+    .await
+    .map_err(|_| anyhow!("认证超时（{}s）", AUTH_TIMEOUT.as_secs()))?
 }
 
 async fn authenticate(
@@ -154,6 +421,7 @@ async fn authenticate(
     target: &Target,
     auth: &AuthRef,
     vault: &Vault,
+    auth_ui: Option<AuthUi<'_>>,
 ) -> Result<()> {
     match auth {
         AuthRef::Password { secret } => {
@@ -193,11 +461,41 @@ async fn authenticate(
                 .await
                 .context("公钥认证请求失败")?;
             if !result.success() {
-                bail!(
-                    "认证失败：{}@{} 拒绝了该密钥",
-                    target.user,
-                    target.host
-                );
+                bail!("认证失败：{}@{} 拒绝了该密钥", target.user, target.host);
+            }
+        }
+        AuthRef::KeyboardInteractive => {
+            let ui = auth_ui
+                .ok_or_else(|| anyhow!("该服务器要求键盘交互认证，但当前入口无法弹出输入框"))?;
+            let mut response = handle
+                .authenticate_keyboard_interactive_start(target.user.as_str(), None::<String>)
+                .await
+                .context("键盘交互认证请求失败")?;
+            loop {
+                match response {
+                    KeyboardInteractiveAuthResponse::Success => break,
+                    KeyboardInteractiveAuthResponse::Failure { .. } => {
+                        bail!(
+                            "认证失败：{}@{} 的键盘交互认证未通过",
+                            target.user,
+                            target.host
+                        );
+                    }
+                    KeyboardInteractiveAuthResponse::InfoRequest {
+                        name,
+                        instructions,
+                        prompts,
+                    } => {
+                        let answers = ui
+                            .prompts
+                            .ask(ui.on_event, name, instructions, prompts)
+                            .await?;
+                        response = handle
+                            .authenticate_keyboard_interactive_respond(answers)
+                            .await
+                            .context("键盘交互认证应答失败")?;
+                    }
+                }
             }
         }
         AuthRef::None => {}
